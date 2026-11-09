@@ -1,0 +1,14 @@
+{
+  "displayName": "Baby Flower Chanelu",
+  "description": "Chanelu walks around on top of your screen (macOS)",
+  "category": "Chanelu",
+  "view.name": "Chanelu",
+  "chanelu.toggleDesktop": "Show/Hide Chanelu on Screen",
+  "chanelu.pet": "Pet Chanelu",
+  "chanelu.sleep": "Put Chanelu to Sleep",
+  "chanelu.showOnDesktop": "Show Chanelu above the Dock (macOS only)",
+  "chanelu.desktopSize": "Chanelu height on screen (px)",
+  "chanelu.size": "Chanelu height in the sidebar panel (px)",
+  "chanelu.speed": "Walking speed (px/s). 1.5x faster on screen",
+  "chanelu.sleepAfterSeconds": "Seconds without typing before Chanelu falls asleep (0 = never)"
+}

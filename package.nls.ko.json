@@ -1,0 +1,14 @@
+{
+  "displayName": "베이비 플라워 샤네루",
+  "description": "샤네루가 화면 위를 돌아다녀요 (맥)",
+  "category": "샤네루",
+  "view.name": "샤네루",
+  "chanelu.toggleDesktop": "샤네루 화면에 띄우기/숨기기",
+  "chanelu.pet": "샤네루 쓰다듬기",
+  "chanelu.sleep": "샤네루 재우기",
+  "chanelu.showOnDesktop": "화면 아래(Dock 위)에 샤네루를 띄워요 (맥 전용)",
+  "chanelu.desktopSize": "화면에 뜨는 샤네루 키 (px)",
+  "chanelu.size": "사이드바 패널 안 샤네루 키 (px)",
+  "chanelu.speed": "걷는 속도 (px/초). 화면 위에서는 1.5배로 걸어요",
+  "chanelu.sleepAfterSeconds": "타이핑이 없으면 몇 초 뒤에 잘지 (0이면 안 잠)"
+}

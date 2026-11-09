@@ -1,0 +1,222 @@
+// @ts-check
+const vscode = require('vscode');
+const net = require('net');
+const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const cp = require('child_process');
+
+/** @type {Desktop | undefined} */
+let desktop;
+
+/** @param {vscode.ExtensionContext} context */
+function activate(context) {
+  const provider = new PupViewProvider(context.extensionUri);
+  desktop = new Desktop(context.extensionPath);
+
+  /** 사이드바와 화면 위 chanelu 둘 다에게 알려요 */
+  const tell = (/** @type {'pet'|'sleep'|'typing'|'saved'} */ type) => {
+    provider.post({ type });
+    desktop?.send(type);
+  };
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider('chanelu.view', provider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+    vscode.commands.registerCommand('chanelu.pet', () => tell('pet')),
+    vscode.commands.registerCommand('chanelu.sleep', () => tell('sleep')),
+    vscode.commands.registerCommand('chanelu.toggleDesktop', () => {
+      const c = vscode.workspace.getConfiguration('chanelu');
+      c.update('showOnDesktop', !c.get('showOnDesktop', true), vscode.ConfigurationTarget.Global);
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('chanelu')) return;
+      provider.post({ type: 'config', config: readConfig() });
+      desktop?.sync();
+    }),
+  );
+
+  // 타이핑하면 깨어나요 (초당 최대 1번만 알림)
+  let lastTyping = 0;
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.document.uri.scheme === 'output' || e.contentChanges.length === 0) return;
+      const now = Date.now();
+      if (now - lastTyping < 1000) return;
+      lastTyping = now;
+      tell('typing');
+    }),
+    vscode.workspace.onDidSaveTextDocument(() => tell('saved')),
+  );
+
+  desktop.sync();
+}
+
+function readConfig() {
+  const c = vscode.workspace.getConfiguration('chanelu');
+  return {
+    size: c.get('size', 72),
+    speed: c.get('speed', 40),
+    sleepAfterSeconds: c.get('sleepAfterSeconds', 120),
+    showOnDesktop: c.get('showOnDesktop', true),
+    desktopSize: c.get('desktopSize', 96),
+  };
+}
+
+/**
+ * 화면 위 chanelu (맥 전용 프로그램 bin/chanelu-desktop) 연결 관리.
+ * VS Code 창이 여러 개여도 프로그램은 하나만 떠 있고, 각 창이 같은 소켓으로 접속해요.
+ * 모든 창이 닫혀 연결이 끊기면 프로그램은 스스로 종료해요.
+ */
+class Desktop {
+  /** @param {string} extensionPath */
+  constructor(extensionPath) {
+    this.bin = path.join(extensionPath, 'bin', 'chanelu-desktop');
+    this.sheet = path.join(extensionPath, 'media', 'sheet.png');
+    this.sockPath = `/tmp/chanelu-${os.userInfo().uid}.sock`;
+    /** @type {net.Socket | null} */
+    this.sock = null;
+    this.enabled = false;
+    /** @type {NodeJS.Timeout | undefined} */
+    this.timer = undefined;
+    this.warned = false;
+  }
+
+  configLine() {
+    const c = readConfig();
+    return `config ${c.desktopSize} ${Math.round(c.speed * 1.5)} ${c.sleepAfterSeconds}`;
+  }
+
+  /** 설정에 맞춰 켜고 끄고, 켜져 있으면 설정값을 보내요 */
+  sync() {
+    const want = process.platform === 'darwin' && readConfig().showOnDesktop;
+    if (want && !this.enabled) {
+      this.enabled = true;
+      this.connect(0);
+    } else if (!want && this.enabled) {
+      this.enabled = false;
+      clearTimeout(this.timer);
+      if (this.sock) this.sock.end('quit\n');
+      this.sock = null;
+    } else if (want) {
+      this.send(this.configLine());
+    }
+  }
+
+  /** @param {string} line */
+  send(line) {
+    if (this.sock && !this.sock.destroyed) this.sock.write(line + '\n');
+  }
+
+  /** @param {number} attempt */
+  connect(attempt) {
+    if (!this.enabled || this.sock) return;
+    const s = net.createConnection(this.sockPath);
+    s.on('connect', () => {
+      if (!this.enabled) { s.destroy(); return; }
+      this.sock = s;
+      s.write(this.configLine() + '\n');
+    });
+    s.on('error', () => {
+      s.destroy();
+      if (!this.enabled || this.sock === s) return;
+      if (attempt === 0) this.spawn();
+      if (attempt < 20) this.timer = setTimeout(() => this.connect(attempt + 1), 250);
+    });
+    s.on('close', () => {
+      if (this.sock !== s) return;
+      this.sock = null;
+      // 다른 창이 끄거나 프로그램이 죽었으면 잠시 뒤 다시 연결 (꺼진 상태면 안 함)
+      if (this.enabled) this.timer = setTimeout(() => this.connect(0), 2000);
+    });
+    s.on('data', () => {});
+  }
+
+  spawn() {
+    const c = readConfig();
+    try {
+      // .vsix로 설치하면 실행 권한이 빠질 수 있어서 다시 넣어줘요
+      fs.chmodSync(this.bin, 0o755);
+      const child = cp.spawn(
+        this.bin,
+        [this.sheet, this.sockPath, String(c.desktopSize), String(Math.round(c.speed * 1.5)), String(c.sleepAfterSeconds)],
+        { detached: true, stdio: 'ignore' },
+      );
+      child.on('error', (err) => this.warn(err));
+      child.unref();
+    } catch (err) {
+      this.warn(err);
+    }
+  }
+
+  /** @param {unknown} err */
+  warn(err) {
+    if (this.warned) return;
+    this.warned = true;
+    vscode.window.showWarningMessage(`chanelu를 화면에 띄우지 못했어요: ${err instanceof Error ? err.message : err}`);
+  }
+
+  dispose() {
+    // quit은 보내지 않아요. 다른 VS Code 창이 아직 쓰고 있을 수 있어서, 마지막 연결이 끊기면 프로그램이 알아서 꺼져요.
+    this.enabled = false;
+    clearTimeout(this.timer);
+    this.sock?.destroy();
+    this.sock = null;
+  }
+}
+
+class PupViewProvider {
+  /** @param {vscode.Uri} extensionUri */
+  constructor(extensionUri) {
+    this.extensionUri = extensionUri;
+    /** @type {vscode.WebviewView | undefined} */
+    this.view = undefined;
+  }
+
+  /** @param {any} msg */
+  post(msg) {
+    this.view?.webview.postMessage(msg);
+  }
+
+  /** @param {vscode.WebviewView} view */
+  resolveWebviewView(view) {
+    this.view = view;
+    const media = vscode.Uri.joinPath(this.extensionUri, 'media');
+    view.webview.options = { enableScripts: true, localResourceRoots: [media] };
+
+    const sheetUri = view.webview.asWebviewUri(vscode.Uri.joinPath(media, 'sheet.png'));
+    const scriptUri = view.webview.asWebviewUri(vscode.Uri.joinPath(media, 'main.js'));
+    const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    const init = JSON.stringify({ sheet: sheetUri.toString(), config: readConfig() });
+
+    view.webview.html = /* html */ `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${view.webview.cspSource}; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: transparent; user-select: none; }
+  #stage { position: relative; width: 100%; height: 100%; min-height: 90px; }
+  #pup { position: absolute; bottom: 4px; left: 0; background-repeat: no-repeat; cursor: pointer; will-change: transform; }
+  .heart { position: absolute; font-size: 14px; pointer-events: none; animation: float 1.2s ease-out forwards; }
+  .zzz { position: absolute; font-size: 12px; pointer-events: none; opacity: .7; font-family: var(--vscode-font-family);
+         color: var(--vscode-foreground); animation: float 2.4s ease-out forwards; }
+  @keyframes float { from { transform: translateY(0); opacity: 1; } to { transform: translateY(-36px); opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="stage"><div id="pup" title="Chanelu ❤"></div></div>
+<script nonce="${nonce}">window.__PUP__ = ${init};</script>
+<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+}
+
+function deactivate() {
+  desktop?.dispose();
+}
+
+module.exports = { activate, deactivate };

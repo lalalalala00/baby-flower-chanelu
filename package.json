@@ -1,0 +1,90 @@
+{
+  "name": "chanelu",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.2.0",
+  "publisher": "lalalalala00",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lalalalala00/baby-flower-chanelu.git"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "icon": "media/icon.png",
+  "engines": {
+    "vscode": "^1.74.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "views": {
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "chanelu.view",
+          "name": "%view.name%",
+          "visibility": "collapsed"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "chanelu.toggleDesktop",
+        "title": "%chanelu.toggleDesktop%",
+        "category": "%category%"
+      },
+      {
+        "command": "chanelu.pet",
+        "title": "%chanelu.pet%",
+        "category": "%category%"
+      },
+      {
+        "command": "chanelu.sleep",
+        "title": "%chanelu.sleep%",
+        "category": "%category%"
+      }
+    ],
+    "configuration": {
+      "title": "%displayName%",
+      "properties": {
+        "chanelu.showOnDesktop": {
+          "type": "boolean",
+          "default": true,
+          "description": "%chanelu.showOnDesktop%"
+        },
+        "chanelu.desktopSize": {
+          "type": "number",
+          "default": 96,
+          "minimum": 40,
+          "maximum": 300,
+          "description": "%chanelu.desktopSize%"
+        },
+        "chanelu.size": {
+          "type": "number",
+          "default": 72,
+          "minimum": 32,
+          "maximum": 200,
+          "description": "%chanelu.size%"
+        },
+        "chanelu.speed": {
+          "type": "number",
+          "default": 40,
+          "minimum": 10,
+          "maximum": 200,
+          "description": "%chanelu.speed%"
+        },
+        "chanelu.sleepAfterSeconds": {
+          "type": "number",
+          "default": 120,
+          "minimum": 0,
+          "description": "%chanelu.sleepAfterSeconds%"
+        }
+      }
+    }
+  }
+}
