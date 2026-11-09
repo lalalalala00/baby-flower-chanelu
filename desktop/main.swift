@@ -113,7 +113,23 @@ final class Controller {
         startIdle()
     }
 
-    func screen() -> NSScreen { window.screen ?? NSScreen.main ?? NSScreen.screens[0] }
+    func screen() -> NSScreen { screenAt(x + w / 2, y) }
+
+    /// 강아지 발 위치(cx, footY)가 속한 화면. 가로로 겹치는 화면이 여럿이면(위아래 배치) 발 높이에 가까운 쪽.
+    func screenAt(_ cx: CGFloat, _ footY: CGFloat) -> NSScreen {
+        let all = NSScreen.screens
+        guard !all.isEmpty else { return NSScreen.main! }
+        let hits = all.filter { $0.frame.minX <= cx && cx < $0.frame.maxX }
+        // 발 아래에 있는 바닥 중 가장 높은 것 (위 모니터에서 떨어뜨리면 위 모니터 바닥에 착지)
+        if let s = hits.filter({ $0.visibleFrame.minY <= footY + 1 }).max(by: { $0.visibleFrame.minY < $1.visibleFrame.minY }) { return s }
+        if let s = hits.min(by: { abs($0.visibleFrame.minY - footY) < abs($1.visibleFrame.minY - footY) }) { return s }
+        // 화면 사이 빈틈이면 가장 가까운 화면
+        return all.min(by: { dist($0, cx) < dist($1, cx) })!
+    }
+
+    func dist(_ s: NSScreen, _ cx: CGFloat) -> CGFloat {
+        cx < s.frame.minX ? s.frame.minX - cx : (cx >= s.frame.maxX ? cx - s.frame.maxX : 0)
+    }
 
     func applySize() {
         h = cfgSize
@@ -163,7 +179,19 @@ final class Controller {
 
     func startWalk() {
         mode = .walk
-        let sf = screen().visibleFrame
+        // 모니터가 여러 대면 가끔(25%) 옆 모니터로 놀러 가요. 가로로 이어진 화면이어야 걸어서 갈 수 있어요.
+        var sf = screen().visibleFrame
+        let here = screen()
+        let neighbors = NSScreen.screens.filter { s in
+            s != here && (abs(s.frame.minX - here.frame.maxX) < 2 || abs(s.frame.maxX - here.frame.minX) < 2)
+        }
+        if let next = neighbors.randomElement(), Double.random(in: 0...1) < 0.25 {
+            sf = next.visibleFrame
+            target = CGFloat.random(in: sf.minX...max(sf.minX + 1, sf.maxX - w))
+            dir = target > x ? 1 : -1
+            play(dir > 0 ? .walkRight : .walkLeft, dur: 0.1, loop: true)
+            return
+        }
         let maxX = sf.maxX - w
         target = CGFloat.random(in: sf.minX...max(sf.minX + 1, maxX))
         // 너무 가까우면 좀 더 멀리
@@ -282,11 +310,16 @@ final class Controller {
         prev = now
         advance(dt)
 
-        let sf = screen().visibleFrame
         switch mode {
         case .walk:
             x += dir * cfgSpeed * CGFloat(dt)
             if (dir > 0 && x >= target) || (dir < 0 && x <= target) { x = target; startIdle() }
+        default:
+            break
+        }
+        // 걸어서 옆 모니터로 넘어가면 그 모니터 바닥을 따라가요
+        let sf = screen().visibleFrame
+        switch mode {
         case .idle:
             if now > restUntil { Double.random(in: 0...1) < 0.7 ? startWalk() : startIdle() }
         case .sleeping:
@@ -304,7 +337,13 @@ final class Controller {
 
         if mode != .dragging {
             if mode != .falling { y = sf.minY }
-            x = max(sf.minX, min(x, sf.maxX - w))
+            if mode == .walk {
+                // 걷는 중에는 모든 화면을 합친 범위 안에서만 막아요 (모니터 사이를 지나갈 수 있게)
+                let all = NSScreen.screens.map { $0.visibleFrame }
+                x = max(all.map { $0.minX }.min() ?? sf.minX, min(x, (all.map { $0.maxX }.max() ?? sf.maxX) - w))
+            } else {
+                x = max(sf.minX, min(x, sf.maxX - w))
+            }
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 

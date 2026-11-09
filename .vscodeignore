@@ -5,3 +5,4 @@ build/**
 *.vsix
 .gitignore
 DEVELOPMENT.md
+docs/**

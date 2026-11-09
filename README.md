@@ -6,7 +6,9 @@
 
 Chanelu, a fluffy little flower puppy, walks along the bottom of your screen while you code.
 
-> 화면 위를 걷는 기능은 **macOS 전용**이에요(Apple Silicon·Intel). 다른 OS에서는 탐색기 사이드바의 **샤네루** 패널 안에서만 돌아다녀요.
+<p align="center"><img src="docs/demo.gif" width="560" alt="샤네루가 걷고, 웃고, 깡충 뛰고, 잠드는 모습 · Chanelu walking, hopping and napping"></p>
+
+> 화면 위를 걷는 기능은 **macOS 전용**이에요(Apple Silicon·Intel). 모니터가 여러 대면 옆 모니터로도 놀러 가요. 다른 OS에서는 탐색기 사이드바의 **샤네루** 패널 안에서만 돌아다녀요.
 > The on-screen pet is **macOS only**. On other platforms Chanelu lives in the Explorer sidebar panel.
 
 ## 이렇게 놀아요 · What Chanelu does
