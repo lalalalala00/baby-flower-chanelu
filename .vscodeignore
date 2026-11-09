@@ -3,3 +3,5 @@ tools/**
 desktop/**
 build/**
 *.vsix
+.gitignore
+DEVELOPMENT.md

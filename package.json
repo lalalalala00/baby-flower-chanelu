@@ -2,14 +2,13 @@
   "name": "chanelu",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "lalalalala00",
   "repository": {
     "type": "git",
     "url": "https://github.com/lalalalala00/baby-flower-chanelu.git"
   },
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.74.0"
@@ -86,5 +85,23 @@
         }
       }
     }
+  },
+  "keywords": [
+    "pet",
+    "dog",
+    "desktop pet",
+    "cute",
+    "puppy",
+    "강아지",
+    "샤네루",
+    "chanelu"
+  ],
+  "galleryBanner": {
+    "color": "#FFF8E1",
+    "theme": "light"
+  },
+  "homepage": "https://github.com/lalalalala00/baby-flower-chanelu",
+  "bugs": {
+    "url": "https://github.com/lalalalala00/baby-flower-chanelu/issues"
   }
 }

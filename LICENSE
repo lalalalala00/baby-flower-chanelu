@@ -1,0 +1,54 @@
+This repository contains two kinds of material under different terms.
+
+1. SOURCE CODE — MIT License
+   (extension.js, media/main.js, desktop/**, tools/**, package*.json and all
+   other code and configuration files)
+
+   Copyright (c) 2026 lalalalala00
+
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+2. CHARACTER ARTWORK AND PHOTOGRAPHS — All rights reserved
+   (media/icon.png, media/sheet.png and any other photograph or image of the
+   character "Chanelu" / 샤네루)
+
+   Copyright (c) 2026 lalalalala00. All rights reserved.
+
+   These images are NOT covered by the MIT License above. The only permitted
+   use is having them displayed by this extension, unmodified, while the
+   extension is installed. Any other use is prohibited without prior written
+   permission, INCLUDING PRIVATE AND PERSONAL, NON-COMMERCIAL USE, such as:
+     - saving, extracting, copying or screenshotting the images for reuse;
+     - editing them or making derivative works (stickers, emoji, fan art,
+       memes, wallpapers, profile pictures, prints, merchandise);
+     - sharing or posting them anywhere;
+     - using them to train or prompt AI / machine-learning models;
+     - using the character's name or likeness in any other product,
+       publication, or service.
+
+---
+
+이 저장소의 코드는 MIT 라이선스로 자유롭게 사용·수정·배포할 수 있습니다.
+
+단, 샤네루의 사진·그림(media/icon.png, media/sheet.png 등)과 캐릭터의 이름·모습은
+저작권자가 모든 권리를 가지며 MIT 라이선스에 포함되지 않습니다. 이 확장을 설치했을 때
+확장 안에서 그대로 표시되는 것 외에는, **사적·개인적·비상업적 용도를 포함한 어떤 용도로도**
+사전 서면 허락 없이 사용할 수 없습니다. 예를 들어 이미지를 저장·추출·캡처해서 쓰는 것,
+편집하거나 스티커·이모티콘·팬아트·배경화면·프로필 사진·굿즈로 만드는 것, 어디든 공유·게시하는 것,
+AI 학습이나 프롬프트에 쓰는 것이 모두 금지됩니다. 코드를 가져다 쓸 때는 자신만의 이미지로 바꿔 주세요.
