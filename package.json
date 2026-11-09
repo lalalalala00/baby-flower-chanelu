@@ -2,7 +2,7 @@
   "name": "chanelu",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "lalalalala00",
   "repository": {
     "type": "git",
@@ -103,5 +103,8 @@
   "homepage": "https://github.com/lalalalala00/baby-flower-chanelu",
   "bugs": {
     "url": "https://github.com/lalalalala00/baby-flower-chanelu/issues"
+  },
+  "scripts": {
+    "package": "vsce package --baseContentUrl https://github.com/lalalalala00/baby-flower-chanelu/blob/main/ --baseImagesUrl https://raw.githubusercontent.com/lalalalala00/baby-flower-chanelu/main/"
   }
 }
