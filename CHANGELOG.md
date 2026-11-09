@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.5
+- Claude, Codex 같은 AI 도구에 반응해요
+  - VS Code 확장이 디스크의 파일 변경을 감지해서, AI가 파일을 고치면 깨어나서 돌아다녀요
+  - 새 신호: `work`(일하는 중), `done`(끝: 하트 + 깡충), `attention`(확인 필요: ❗️ + 손 흔들기)
+  - Claude Code 훅·Codex notify 설정 방법은 README 참고
+
 ## 0.2.4
 - 맥 앱: VS Code 샤네루가 이미 떠 있으면 앱이 아무 반응 없이 꺼지던 문제 수정. 이제 앱이 자리를 넘겨받고, VS Code는 앱 샤네루에 붙어요.
 

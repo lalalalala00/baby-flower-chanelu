@@ -36,6 +36,28 @@ Download `Chanelu-mac.zip` (macOS) or `Chanelu.exe` (Windows 10/11) from the [la
 | 2분 동안 타이핑 없음 · Idle 2 min | 쿨쿨 잠들어요 · falls asleep |
 | 타이핑 · Typing | 깨어나요 · wakes up |
 
+## Claude · Codex와 같이 쓰기 · With AI coding agents
+
+AI가 파일을 고치면 샤네루가 깨어나서 같이 돌아다녀요 (VS Code 확장이 파일 변경을 감지해요).
+작업이 끝났을 때 깡충, 확인이 필요할 때 손 흔들기까지 하려면 아래를 설정하세요. (맥)
+
+**Claude Code** — `~/.claude/settings.json`에 추가:
+
+```json
+"hooks": {
+  "UserPromptSubmit": [{ "hooks": [{ "type": "command", "async": true, "command": "printf 'work\\n' | nc -U -w1 /tmp/chanelu-$(id -u).sock >/dev/null 2>&1 || true" }] }],
+  "PostToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "async": true, "command": "printf 'work\\n' | nc -U -w1 /tmp/chanelu-$(id -u).sock >/dev/null 2>&1 || true" }] }],
+  "Stop": [{ "hooks": [{ "type": "command", "async": true, "command": "printf 'done\\n' | nc -U -w1 /tmp/chanelu-$(id -u).sock >/dev/null 2>&1 || true" }] }],
+  "Notification": [{ "hooks": [{ "type": "command", "async": true, "command": "printf 'attention\\n' | nc -U -w1 /tmp/chanelu-$(id -u).sock >/dev/null 2>&1 || true" }] }]
+}
+```
+
+**Codex** — `~/.codex/config.toml` 맨 위에 추가:
+
+```toml
+notify = ["sh", "-c", "printf 'done\\n' | nc -U -w1 /tmp/chanelu-$(id -u).sock >/dev/null 2>&1 || true"]
+```
+
 ## 명령 · Commands
 
 - `샤네루 화면에 띄우기/숨기기` · `Show/Hide Chanelu on Screen`

@@ -329,6 +329,28 @@ final class Controller {
         case "typing":
             lastInput = CACurrentMediaTime()
             if mode == .sleeping { wakeUp { [unowned self] in self.startIdle() } }
+        case "work":
+            // AI(Claude, Codex 등)가 일하는 중: 깨어 있고, 쉬고 있었으면 같이 바쁘게 돌아다녀요
+            lastInput = CACurrentMediaTime()
+            if mode == .sleeping { wakeUp { [unowned self] in self.startWalk() } }
+            else if mode == .idle { startWalk() }
+        case "done":
+            // AI 작업 끝: 하트 + 깡충
+            lastInput = CACurrentMediaTime()
+            if !held {
+                popup("❤️", color: nil)
+                wakeUp { [unowned self] in self.trick(.hop) }
+            }
+        case "attention":
+            // AI가 확인/승인을 기다려요: "!" + 손 흔들기, 두 발 서기
+            lastInput = CACurrentMediaTime()
+            if !held {
+                popup("❗️", color: nil)
+                wakeUp { [unowned self] in
+                    self.mode = .busy
+                    self.play(.wave, dur: 0.11, onDone: { [unowned self] in self.trick(.beg) })
+                }
+            }
         case "saved":
             lastInput = CACurrentMediaTime()
             if !held { wakeUp { [unowned self] in self.trick(.hop) } }

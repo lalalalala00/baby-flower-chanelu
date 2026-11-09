@@ -14,9 +14,12 @@ function activate(context) {
   const provider = new PupViewProvider(context.extensionUri);
   desktop = new Desktop(context.extensionPath);
 
+  /** 사이드바 패널은 기본 반응만 알아들어서 비슷한 걸로 바꿔 보내요 */
+  const SIDEBAR = { work: 'typing', done: 'saved', attention: 'pet' };
+
   /** 사이드바와 화면 위 chanelu 둘 다에게 알려요 */
-  const tell = (/** @type {'pet'|'sleep'|'typing'|'saved'} */ type) => {
-    provider.post({ type });
+  const tell = (/** @type {'pet'|'sleep'|'typing'|'saved'|'work'|'done'|'attention'} */ type) => {
+    provider.post({ type: SIDEBAR[/** @type {keyof typeof SIDEBAR} */ (type)] ?? type });
     desktop?.send(type);
   };
 
@@ -49,6 +52,21 @@ function activate(context) {
     }),
     vscode.workspace.onDidSaveTextDocument(() => tell('saved')),
   );
+
+  // Claude, Codex 같은 AI 도구는 편집기를 거치지 않고 디스크에 바로 써요.
+  // 워크스페이스 파일이 바뀌면 "일하는 중"으로 알려요. 빌드 결과물·의존성 폴더는 계속 바뀌니까 빼요.
+  const IGNORED = /[\\/](\.git|node_modules|\.next|dist|build|out|\.turbo|\.cache|coverage|\.vercel|\.svelte-kit|target|__pycache__|\.venv)[\\/]/;
+  let lastWork = 0;
+  /** @param {vscode.Uri} uri */
+  const onDiskChange = (uri) => {
+    if (IGNORED.test(uri.fsPath)) return;
+    const now = Date.now();
+    if (now - lastWork < 1500) return;
+    lastWork = now;
+    tell('work');
+  };
+  const watcher = vscode.workspace.createFileSystemWatcher('**/*');
+  context.subscriptions.push(watcher, watcher.onDidChange(onDiskChange), watcher.onDidCreate(onDiskChange));
 
   desktop.sync();
 }
