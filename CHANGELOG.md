@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.2.4
+- 맥 앱: VS Code 샤네루가 이미 떠 있으면 앱이 아무 반응 없이 꺼지던 문제 수정. 이제 앱이 자리를 넘겨받고, VS Code는 앱 샤네루에 붙어요.
+
 ## 0.2.3
 - 마켓플레이스 README 이미지가 안 보이던 문제 수정
 - VS Code 없이 쓰는 데스크톱 앱 추가: 맥 `Chanelu.app`, 윈도우 `Chanelu.exe` (GitHub 릴리스에서 내려받기)

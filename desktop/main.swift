@@ -26,8 +26,45 @@ var cfgSleep: Double = standalone
     : (args.count > 5 ? (Double(args[5]) ?? 120) : 120)
 
 // ---- 한 번에 하나만 실행 (VS Code 창이 여러 개여도 chanelu는 한 마리) ----
+func unixAddr(_ path: String) -> sockaddr_un {
+    var addr = sockaddr_un()
+    addr.sun_family = sa_family_t(AF_UNIX)
+    addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+    let bytes = Array(path.utf8.prefix(100))
+    withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+        for (i, b) in bytes.enumerated() { raw[i] = b }
+        raw[bytes.count] = 0
+    }
+    return addr
+}
+
+/// 이미 떠 있는 샤네루(VS Code가 띄운 것)에게 한 줄 보내기
+func sendLine(_ path: String, _ line: String) {
+    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+    guard fd >= 0 else { return }
+    defer { close(fd) }
+    var addr = unixAddr(path)
+    let ok = withUnsafePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+    }
+    guard ok == 0 else { return }
+    _ = (line + "\n").withCString { write(fd, $0, strlen($0)) }
+}
+
 let lockFd = open(sockPath + ".lock", O_CREAT | O_RDWR, 0o600)
-if lockFd < 0 || flock(lockFd, LOCK_EX | LOCK_NB) != 0 { exit(0) }
+if lockFd < 0 { exit(0) }
+if flock(lockFd, LOCK_EX | LOCK_NB) != 0 {
+    // VS Code가 띄운 샤네루는 그대로 두고 조용히 양보해요.
+    // 앱(혼자 실행)은 VS Code 샤네루에게 자리를 넘겨받아요. VS Code 확장은 잠시 뒤 앱 샤네루에 다시 붙어요.
+    guard standalone else { exit(0) }
+    sendLine(sockPath, "quit")
+    var got = false
+    for _ in 0..<30 {
+        usleep(100_000)
+        if flock(lockFd, LOCK_EX | LOCK_NB) == 0 { got = true; break }
+    }
+    if !got { exit(0) } // 다른 앱 샤네루가 이미 떠 있으면 그대로 둬요
+}
 
 func quit() -> Never {
     unlink(sockPath)
@@ -386,14 +423,7 @@ final class Server {
         self.onLine = onLine
         unlink(path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
-        let bytes = Array(path.utf8.prefix(100))
-        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
-            for (i, b) in bytes.enumerated() { raw[i] = b }
-            raw[bytes.count] = 0
-        }
+        var addr = unixAddr(path)
         let ok = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
