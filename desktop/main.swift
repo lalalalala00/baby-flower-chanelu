@@ -436,12 +436,12 @@ final class Client {
 }
 
 final class Server {
-    let onLine: (String) -> Void
+    let onLine: (String, Int32) -> Void
     var listenSrc: DispatchSourceRead?
     var clients: [Int32: Client] = [:]
     var emptySince: Double? = CACurrentMediaTime()
 
-    init(path: String, onLine: @escaping (String) -> Void) {
+    init(path: String, onLine: @escaping (String, Int32) -> Void) {
         self.onLine = onLine
         unlink(path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -478,7 +478,7 @@ final class Server {
             while let i = client.buf.firstIndex(of: 10) {
                 let line = String(decoding: client.buf[0..<i], as: UTF8.self)
                 client.buf.removeSubrange(0...i)
-                self.onLine(line.trimmingCharacters(in: .whitespacesAndNewlines))
+                self.onLine(line.trimmingCharacters(in: .whitespacesAndNewlines), fd)
             }
         }
         src.setCancelHandler { close(fd) }
@@ -575,7 +575,15 @@ func setupMenuBar(_ ctl: Controller) {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory) // Dock 아이콘 없이
 let ctl = Controller(frames: loadFrames())
-let server = Server(path: sockPath) { ctl.handle($0) }
+let server = Server(path: sockPath) { line, fd in
+    if line == "version" {
+        // VS Code 확장이 버전을 물어보면 답해요. 예전 버전이면 확장이 새 버전으로 바꿔 띄워요.
+        let reply = "version \(helperVersion) \(standalone ? "app" : "ext")\n"
+        _ = reply.withCString { write(fd, $0, strlen($0)) }
+    } else {
+        ctl.handle(line)
+    }
+}
 if standalone { setupMenuBar(ctl) }
 
 let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { _ in

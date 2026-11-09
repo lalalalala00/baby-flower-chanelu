@@ -90,6 +90,7 @@ function readConfig() {
 class Desktop {
   /** @param {string} extensionPath */
   constructor(extensionPath) {
+    this.version = require(path.join(extensionPath, 'package.json')).version;
     this.bin = path.join(extensionPath, 'bin', 'chanelu-desktop');
     this.sheet = path.join(extensionPath, 'media', 'sheet.png');
     this.sockPath = `/tmp/chanelu-${os.userInfo().uid}.sock`;
@@ -135,6 +136,7 @@ class Desktop {
       if (!this.enabled) { s.destroy(); return; }
       this.sock = s;
       s.write(this.configLine() + '\n');
+      this.checkVersion(s);
     });
     s.on('error', () => {
       s.destroy();
@@ -148,7 +150,31 @@ class Desktop {
       // 다른 창이 끄거나 프로그램이 죽었으면 잠시 뒤 다시 연결 (꺼진 상태면 안 함)
       if (this.enabled) this.timer = setTimeout(() => this.connect(0), 2000);
     });
-    s.on('data', () => {});
+  }
+
+  /**
+   * 떠 있는 샤네루가 이 확장보다 예전 버전이면 새 버전으로 바꿔 띄워요.
+   * (예전 샤네루는 새 신호를 몰라서, 확장을 업데이트해도 반응이 안 바뀌던 문제)
+   * 0.2.4 이하는 버전 질문에 답을 못 해요 → 답이 없으면 예전 버전으로 봐요.
+   * 맥 앱(혼자 실행)은 quit을 무시하니까 앱 샤네루는 그대로 남아요.
+   * @param {net.Socket} s
+   */
+  checkVersion(s) {
+    let buf = '';
+    let answered = false;
+    const replace = () => {
+      if (this.sock === s && !s.destroyed) s.write('quit\n'); // 끊기면 close 핸들러가 새 버전을 띄워요
+    };
+    const timer = setTimeout(() => { if (!answered) replace(); }, 1500);
+    s.on('data', (chunk) => {
+      buf += chunk.toString();
+      const m = buf.match(/^version (\S+)/m);
+      if (!m || answered) return;
+      answered = true;
+      clearTimeout(timer);
+      if (olderThan(m[1], this.version)) replace();
+    });
+    s.write('version\n');
   }
 
   spawn() {
@@ -231,6 +257,15 @@ class PupViewProvider {
 </body>
 </html>`;
   }
+}
+
+/** "0.2.5" < "0.2.6" 같은 버전 비교 */
+function olderThan(/** @type {string} */ a, /** @type {string} */ b) {
+  const pa = a.split('.').map(Number), pb = b.split('.').map(Number);
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) < (pb[i] || 0);
+  }
+  return false;
 }
 
 function deactivate() {
