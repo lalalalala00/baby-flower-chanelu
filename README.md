@@ -11,6 +11,21 @@ Chanelu, a fluffy little flower puppy, walks along the bottom of your screen whi
 > 화면 위를 걷는 기능은 **macOS 전용**이에요(Apple Silicon·Intel). 모니터가 여러 대면 옆 모니터로도 놀러 가요. 다른 OS에서는 탐색기 사이드바의 **샤네루** 패널 안에서만 돌아다녀요.
 > The on-screen pet is **macOS only**. On other platforms Chanelu lives in the Explorer sidebar panel.
 
+## VS Code 없이 쓰기 · Without VS Code
+
+[**릴리스 페이지**](https://github.com/lalalalala00/baby-flower-chanelu/releases/latest)에서 내려받아 바로 실행하면 돼요. 설치는 필요 없어요.
+
+| | 파일 | 처음 실행할 때 |
+|---|---|---|
+| 🍎 맥 | `Chanelu-mac.zip` → 압축을 풀고 `Chanelu.app`을 응용 프로그램 폴더로 | 경고가 뜨면 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기** |
+| 🪟 윈도우 10/11 | `Chanelu.exe` | "Windows의 PC 보호"가 뜨면 **추가 정보 → 실행** |
+
+- 맥은 메뉴 막대, 윈도우는 작업 표시줄 트레이의 샤네루 아이콘에서 쓰다듬기·재우기·크기·종료를 할 수 있어요.
+- 키보드·마우스를 한동안 안 쓰면 잠들고, 다시 쓰면 깨어나요.
+- 윈도우는 트레이 메뉴에서 **윈도우 시작할 때 실행**을 켤 수 있어요. 맥은 **시스템 설정 → 일반 → 로그인 항목**에 Chanelu.app을 추가하세요.
+
+Download `Chanelu-mac.zip` (macOS) or `Chanelu.exe` (Windows 10/11) from the [latest release](https://github.com/lalalalala00/baby-flower-chanelu/releases/latest). The apps are not code-signed, so the OS will warn on first launch.
+
 ## 이렇게 놀아요 · What Chanelu does
 
 | | |

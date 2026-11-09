@@ -105,6 +105,6 @@
     "url": "https://github.com/lalalalala00/baby-flower-chanelu/issues"
   },
   "scripts": {
-    "package": "vsce package --baseContentUrl https://github.com/lalalalala00/baby-flower-chanelu/blob/main/ --baseImagesUrl https://raw.githubusercontent.com/lalalalala00/baby-flower-chanelu/main/"
+    "package": "npx -y @vscode/vsce@3.2.1 package --baseContentUrl https://github.com/lalalalala00/baby-flower-chanelu/blob/main/ --baseImagesUrl https://raw.githubusercontent.com/lalalalala00/baby-flower-chanelu/main/"
   }
 }
