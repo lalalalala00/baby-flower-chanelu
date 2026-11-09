@@ -1,21 +1,29 @@
 // chanelu 데스크톱 펫: 투명 창으로 화면 아래(Dock 위)를 돌아다녀요.
-// 사용법: chanelu-desktop <sheet.png> <socket-path> [size speed sleepAfterSeconds]
-// VS Code 확장이 유닉스 소켓으로 한 줄짜리 명령을 보내요: typing | saved | pet | sleep | config <size> <speed> <sleep> | quit
-// 연결된 VS Code 창이 하나도 없으면 몇 초 뒤 스스로 종료해요.
+//
+// 두 가지로 실행돼요.
+// 1) VS Code 확장이 실행: chanelu-desktop <sheet.png> <socket-path> [size speed sleepAfterSeconds]
+//    확장이 유닉스 소켓으로 한 줄짜리 명령을 보내요: typing | saved | pet | sleep | config <size> <speed> <sleep> | quit
+//    연결된 VS Code 창이 하나도 없으면 몇 초 뒤 스스로 종료해요.
+// 2) 혼자 실행 (Chanelu.app 더블클릭, 인자 없음): 메뉴 막대 아이콘으로 조작하고,
+//    키보드·마우스를 한동안 안 쓰면 잠들어요. 같은 소켓을 열어 두니 VS Code 확장도 이 샤네루에 붙어요.
 import AppKit
 
 signal(SIGPIPE, SIG_IGN)
 
 let args = CommandLine.arguments
-guard args.count >= 3 else {
-    FileHandle.standardError.write("usage: chanelu-desktop <sheet.png> <socket> [size speed sleepAfter]\n".data(using: .utf8)!)
-    exit(2)
-}
-let sheetPath = args[1]
-let sockPath = args[2]
-var cfgSize: CGFloat = args.count > 3 ? CGFloat(Double(args[3]) ?? 96) : 96
+let standalone = args.count < 3
+let defaults = UserDefaults.standard
+let sheetPath = standalone ? (Bundle.main.path(forResource: "sheet", ofType: "png") ?? "sheet.png") : args[1]
+let sockPath = standalone
+    ? (ProcessInfo.processInfo.environment["CHANELU_SOCKET"] ?? "/tmp/chanelu-\(getuid()).sock") // 테스트용으로 바꿀 수 있어요
+    : args[2]
+var cfgSize: CGFloat = standalone
+    ? CGFloat(defaults.object(forKey: "size") as? Double ?? 96)
+    : (args.count > 3 ? CGFloat(Double(args[3]) ?? 96) : 96)
 var cfgSpeed: CGFloat = args.count > 4 ? CGFloat(Double(args[4]) ?? 60) : 60
-var cfgSleep: Double = args.count > 5 ? (Double(args[5]) ?? 120) : 120
+var cfgSleep: Double = standalone
+    ? (defaults.object(forKey: "sleepAfter") as? Double ?? 120)
+    : (args.count > 5 ? (Double(args[5]) ?? 120) : 120)
 
 // ---- 한 번에 하나만 실행 (VS Code 창이 여러 개여도 chanelu는 한 마리) ----
 let lockFd = open(sockPath + ".lock", O_CREAT | O_RDWR, 0o600)
@@ -291,12 +299,12 @@ final class Controller {
             if !held { pet() }
         case "sleep":
             fallAsleep()
-        case "config" where p.count >= 4:
+        case "config" where p.count >= 4 && !standalone: // 혼자 실행 중이면 메뉴 설정이 우선
             cfgSize = CGFloat(Double(p[1]) ?? Double(cfgSize))
             cfgSpeed = CGFloat(Double(p[2]) ?? Double(cfgSpeed))
             cfgSleep = Double(p[3]) ?? cfgSleep
             applySize()
-        case "quit":
+        case "quit" where !standalone: // 혼자 실행한 앱은 메뉴의 종료로만 꺼져요
             quit()
         default:
             break
@@ -333,6 +341,12 @@ final class Controller {
             break
         }
 
+        if standalone {
+            // 혼자 실행할 땐 키보드·마우스를 쓴 시각을 기준으로 자고 깨요
+            let idle = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
+            lastInput = max(lastInput, now - idle)
+            if mode == .sleeping && idle < 0.5 { wakeUp { [unowned self] in self.startIdle() } }
+        }
         if cfgSleep > 0 && (mode == .idle || mode == .walk) && now - lastInput > cfgSleep { fallAsleep() }
 
         if mode != .dragging {
@@ -429,15 +443,93 @@ final class Server {
     }
 }
 
+// ---- 메뉴 막대 (혼자 실행할 때만) ----
+final class MenuTarget: NSObject {
+    let ctl: Controller
+    var sizeItems: [NSMenuItem] = []
+    var sleepItems: [NSMenuItem] = []
+    init(ctl: Controller) { self.ctl = ctl }
+
+    @objc func pet() { ctl.pet() }
+    @objc func sleep() { ctl.fallAsleep() }
+    @objc func quitApp() { quit() }
+    @objc func setSize(_ item: NSMenuItem) {
+        cfgSize = CGFloat(item.tag)
+        defaults.set(Double(item.tag), forKey: "size")
+        ctl.applySize()
+        refresh()
+    }
+    @objc func setSleep(_ item: NSMenuItem) {
+        cfgSleep = Double(item.tag)
+        defaults.set(Double(item.tag), forKey: "sleepAfter")
+        refresh()
+    }
+    func refresh() {
+        for i in sizeItems { i.state = CGFloat(i.tag) == cfgSize ? .on : .off }
+        for i in sleepItems { i.state = Double(i.tag) == cfgSleep ? .on : .off }
+    }
+}
+
+var statusItem: NSStatusItem?
+var menuTarget: MenuTarget?
+
+func setupMenuBar(_ ctl: Controller) {
+    let t = MenuTarget(ctl: ctl)
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let icon = NSImage(cgImage: ctl.frames[Row.idle.rawValue][0], size: NSSize(width: 15, height: 20))
+    item.button?.image = icon
+    item.button?.toolTip = "베이비 플라워 샤네루"
+
+    let menu = NSMenu()
+    func add(_ title: String, _ action: Selector, to m: NSMenu = menu, tag: Int = 0, key: String = "") -> NSMenuItem {
+        let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        i.target = t
+        i.tag = tag
+        m.addItem(i)
+        return i
+    }
+    let header = NSMenuItem(title: "베이비 플라워 샤네루", action: nil, keyEquivalent: "")
+    header.isEnabled = false
+    menu.addItem(header)
+    menu.addItem(.separator())
+    _ = add("쓰다듬기", #selector(MenuTarget.pet))
+    _ = add("재우기", #selector(MenuTarget.sleep))
+
+    let sizeMenu = NSMenu()
+    for (name, v) in [("작게", 72), ("보통", 96), ("크게", 128), ("아주 크게", 160)] {
+        t.sizeItems.append(add(name, #selector(MenuTarget.setSize(_:)), to: sizeMenu, tag: v))
+    }
+    let sizeRoot = NSMenuItem(title: "크기", action: nil, keyEquivalent: "")
+    sizeRoot.submenu = sizeMenu
+    menu.addItem(sizeRoot)
+
+    let sleepMenu = NSMenu()
+    for (name, v) in [("1분", 60), ("2분", 120), ("5분", 300), ("10분", 600), ("안 잠", 0)] {
+        t.sleepItems.append(add(name, #selector(MenuTarget.setSleep(_:)), to: sleepMenu, tag: v))
+    }
+    let sleepRoot = NSMenuItem(title: "안 움직이면 잠들기", action: nil, keyEquivalent: "")
+    sleepRoot.submenu = sleepMenu
+    menu.addItem(sleepRoot)
+
+    menu.addItem(.separator())
+    _ = add("종료", #selector(MenuTarget.quitApp), key: "q")
+    item.menu = menu
+    t.refresh()
+    statusItem = item
+    menuTarget = t
+}
+
 // ---- 시작 ----
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory) // Dock 아이콘 없이
 let ctl = Controller(frames: loadFrames())
 let server = Server(path: sockPath) { ctl.handle($0) }
+if standalone { setupMenuBar(ctl) }
 
 let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { _ in
     ctl.tick()
-    if let t = server.emptySince, CACurrentMediaTime() - t > 5 { quit() }
+    // VS Code가 띄운 경우에만, 연결된 창이 없으면 종료
+    if !standalone, let t = server.emptySince, CACurrentMediaTime() - t > 5 { quit() }
 }
 RunLoop.main.add(timer, forMode: .common)
 app.run()

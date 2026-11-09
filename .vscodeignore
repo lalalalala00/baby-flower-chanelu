@@ -2,7 +2,10 @@
 tools/**
 desktop/**
 build/**
+dist/**
+windows/**
+.github/**
+docs/**
 *.vsix
 .gitignore
 DEVELOPMENT.md
-docs/**

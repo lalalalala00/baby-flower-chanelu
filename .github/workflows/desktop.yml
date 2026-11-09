@@ -1,0 +1,48 @@
+name: Desktop apps
+
+# main에 푸시하면 빌드만 확인하고, 릴리스를 만들면 맥 .zip / 윈도우 .exe를 그 릴리스에 붙여요.
+on:
+  push:
+    branches: [main]
+    paths: ['desktop/**', 'windows/**', 'media/sheet.png', 'media/icon.png', 'tools/build-*.sh', '.github/workflows/desktop.yml']
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Chanelu.exe
+        run: dotnet build windows/Chanelu.csproj -c Release -o out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Chanelu-windows
+          path: out/Chanelu.exe
+      - name: Attach to release
+        if: github.event_name == 'release'
+        run: gh release upload "${{ github.event.release.tag_name }}" out/Chanelu.exe --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Chanelu.app
+        run: |
+          ./tools/build-desktop.sh
+          ./tools/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Chanelu-mac
+          path: dist/Chanelu-mac.zip
+      - name: Attach to release
+        if: github.event_name == 'release'
+        run: gh release upload "${{ github.event.release.tag_name }}" dist/Chanelu-mac.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
