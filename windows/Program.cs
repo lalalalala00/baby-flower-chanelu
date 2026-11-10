@@ -1,4 +1,4 @@
-// 베이비 플라워 샤네루 — 윈도우용 데스크톱 펫
+// 꽃개 샤네루 — 윈도우용 데스크톱 펫
 // 작업 표시줄 위를 돌아다녀요. 클릭하면 반응하고, 드래그해서 들어 올릴 수 있고,
 // 키보드·마우스를 한동안 안 쓰면 잠들어요. 트레이 아이콘 메뉴로 크기·잠들기·시작 시 실행·종료를 바꿔요.
 using System;
@@ -443,7 +443,7 @@ namespace Chanelu
         void SetupTray()
         {
             tray.Icon = LoadTrayIcon();
-            tray.Text = "베이비 플라워 샤네루";
+            tray.Text = "꽃개 샤네루";
             tray.ContextMenuStrip = menu;
             tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) Pet(); };
 
@@ -472,7 +472,7 @@ namespace Chanelu
             }
             startup.Click += (_, __) => { SetRunAtStartup(!IsRunAtStartup()); RefreshChecks(); };
 
-            menu.Items.Add(new ToolStripMenuItem("베이비 플라워 샤네루") { Enabled = false });
+            menu.Items.Add(new ToolStripMenuItem("꽃개 샤네루") { Enabled = false });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("쓰다듬기", null, (_, __) => Pet());
             menu.Items.Add("재우기", null, (_, __) => FallAsleep());

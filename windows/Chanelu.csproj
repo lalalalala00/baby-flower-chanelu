@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- 베이비 플라워 샤네루 윈도우용 데스크톱 펫.
+  <!-- 꽃개 샤네루 윈도우용 데스크톱 펫.
        .NET Framework 4.8(윈도우 10/11 기본 탑재)을 대상으로 해서 받는 사람이 런타임을 설치할 필요가 없어요.
        빌드: dotnet build windows/Chanelu.csproj -c Release  (윈도우에서, GitHub Actions가 대신 해줘요) -->
   <PropertyGroup>
@@ -11,7 +11,7 @@
     <RootNamespace>Chanelu</RootNamespace>
     <ApplicationIcon>chanelu.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.2.6</Version>
+    <Version>0.2.7</Version>
     <Product>Baby Flower Chanelu</Product>
     <AssemblyTitle>Baby Flower Chanelu</AssemblyTitle>
     <Company>lalalalala00</Company>

@@ -530,7 +530,7 @@ func setupMenuBar(_ ctl: Controller) {
     let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let icon = NSImage(cgImage: ctl.frames[Row.idle.rawValue][0], size: NSSize(width: 15, height: 20))
     item.button?.image = icon
-    item.button?.toolTip = "베이비 플라워 샤네루"
+    item.button?.toolTip = "꽃개 샤네루"
 
     let menu = NSMenu()
     func add(_ title: String, _ action: Selector, to m: NSMenu = menu, tag: Int = 0, key: String = "") -> NSMenuItem {
@@ -540,7 +540,7 @@ func setupMenuBar(_ ctl: Controller) {
         m.addItem(i)
         return i
     }
-    let header = NSMenuItem(title: "베이비 플라워 샤네루", action: nil, keyEquivalent: "")
+    let header = NSMenuItem(title: "꽃개 샤네루", action: nil, keyEquivalent: "")
     header.isEnabled = false
     menu.addItem(header)
     menu.addItem(.separator())

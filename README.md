@@ -1,6 +1,6 @@
 <p align="center"><img src="media/icon.png" width="160" alt="Chanelu"></p>
 
-# Baby Flower Chanelu · 베이비 플라워 샤네루
+# Baby Flower Chanelu · 꽃개 샤네루
 
 샤네루가 화면 아래(Dock 위)를 돌아다녀요. VS Code 창 위에도, 다른 앱 위에도 보여요.
 
