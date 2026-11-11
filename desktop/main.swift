@@ -61,15 +61,17 @@ let lockFd = open(sockPath + ".lock", O_CREAT | O_RDWR, 0o600)
 if lockFd < 0 { exit(0) }
 if flock(lockFd, LOCK_EX | LOCK_NB) != 0 {
     // VS Code가 띄운 샤네루는 그대로 두고 조용히 양보해요.
-    // 앱(혼자 실행)은 VS Code 샤네루에게 자리를 넘겨받아요. VS Code 확장은 잠시 뒤 앱 샤네루에 다시 붙어요.
+    // 앱(혼자 실행)은 이미 떠 있는 샤네루(VS Code든 다른 펫 앱이든)에게서 자리를 넘겨받아요.
+    // 새로 받은 펫 앱을 열면 그 펫이 목록에 들어가야 하니까요. VS Code 확장은 잠시 뒤 앱 샤네루에 다시 붙어요.
     guard standalone else { exit(0) }
-    sendLine(sockPath, "quit")
+    sendLine(sockPath, "quit")      // VS Code가 띄운 샤네루
+    sendLine(sockPath, "takeover")  // 혼자 실행한 앱 (0.3.0부터)
     var got = false
     for _ in 0..<30 {
         usleep(100_000)
         if flock(lockFd, LOCK_EX | LOCK_NB) == 0 { got = true; break }
     }
-    if !got { exit(0) } // 다른 앱 샤네루가 이미 떠 있으면 그대로 둬요
+    if !got { exit(0) } // 예전 버전 앱이 떠 있으면 그대로 둬요
 }
 
 func quit() -> Never {
@@ -668,7 +670,9 @@ final class Controller {
             cfgSpeed = CGFloat(Double(p[2]) ?? Double(cfgSpeed))
             cfgSleep = Double(p[3]) ?? cfgSleep
             applySize()
-        case "quit" where !standalone: // 혼자 실행한 앱은 메뉴의 종료로만 꺼져요
+        case "quit" where !standalone: // 혼자 실행한 앱은 메뉴의 종료나 takeover로만 꺼져요
+            quit()
+        case "takeover": // 다른 펫 앱이 새로 열렸어요: 자리를 넘겨줘요
             quit()
         default:
             break

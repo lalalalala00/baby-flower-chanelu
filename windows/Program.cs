@@ -27,18 +27,44 @@ namespace Chanelu
 {
     static class Program
     {
+        /// <summary>뮤텍스 잡기. 앞 프로그램이 정리 없이 꺼졌어도(Abandoned) 잡은 걸로 봐요.</summary>
+        static bool Acquire(Mutex m, int ms)
+        {
+            try { return m.WaitOne(ms); }
+            catch (AbandonedMutexException) { return true; }
+        }
+
         [STAThread]
         static void Main(string[] args)
         {
-            // 한 번에 한 마리만
-            using (var mutex = new Mutex(true, @"Local\BabyFlowerChanelu", out bool created))
+            // 한 번에 한 마리만. 이미 떠 있으면 그 프로그램에게 꺼 달라고 하고 자리를 넘겨받아요.
+            // (새로 받은 펫 프로그램을 열면 그 펫이 목록에 들어가야 하니까요)
+            using (var mutex = new Mutex(false, @"Local\BabyFlowerChanelu"))
+            using (var takeover = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\BabyFlowerChanelu.Takeover"))
             {
-                if (!created) return;
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                var settings = Settings.Load();
-                var pet = PetLoader.Find(args, settings, out string warning);
-                Application.Run(new PupForm(pet, warning, settings));
+                if (!Acquire(mutex, 0))
+                {
+                    takeover.Set();
+                    if (!Acquire(mutex, 3000)) return; // 예전 버전이 떠 있으면 그대로 둬요
+                }
+                takeover.Reset(); // 예전 버전에게 보냈다가 남은 신호는 지워요
+                try
+                {
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    var settings = Settings.Load();
+                    var pet = PetLoader.Find(args, settings, out string warning);
+                    var form = new PupForm(pet, warning, settings);
+                    // 다음에 다른 펫 프로그램이 열리면 꺼져요
+                    var watcher = new Thread(() =>
+                    {
+                        takeover.WaitOne();
+                        try { form.BeginInvoke((Action)form.Close); } catch { }
+                    }) { IsBackground = true };
+                    watcher.Start();
+                    Application.Run(form);
+                }
+                finally { mutex.ReleaseMutex(); }
             }
         }
     }
