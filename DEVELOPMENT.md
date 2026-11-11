@@ -12,3 +12,8 @@
 - 윈도우: `windows/` (C#, .NET Framework 4.8) — GitHub Actions가 빌드
 - 아이콘: `node tools/make-ico.js` → `windows/chanelu.ico`
 - 릴리스를 만들면 `.github/workflows/desktop.yml`이 맥 zip과 윈도우 exe를 릴리스에 붙여요
+
+## 다른 펫 띄우기 (pet.json)
+- 형식: [docs/pet-format.md](docs/pet-format.md)
+- 맥에서 테스트: `CHANELU_SOCKET=/tmp/test.sock CHANELU_PET=<펫 폴더> dist/Chanelu.app/Contents/MacOS/Chanelu`
+- 윈도우에서 테스트: `Chanelu.exe <펫 폴더>\pet.json`

@@ -1,11 +1,15 @@
 // chanelu 데스크톱 펫: 투명 창으로 화면 아래(Dock 위)를 돌아다녀요.
 //
 // 두 가지로 실행돼요.
-// 1) VS Code 확장이 실행: chanelu-desktop <sheet.png> <socket-path> [size speed sleepAfterSeconds]
+// 1) VS Code 확장이 실행: chanelu-desktop <sheet.png | pet.json> <socket-path> [size speed sleepAfterSeconds]
 //    확장이 유닉스 소켓으로 한 줄짜리 명령을 보내요: typing | saved | pet | sleep | config <size> <speed> <sleep> | quit
 //    연결된 VS Code 창이 하나도 없으면 몇 초 뒤 스스로 종료해요.
 // 2) 혼자 실행 (Chanelu.app 더블클릭, 인자 없음): 메뉴 막대 아이콘으로 조작하고,
 //    키보드·마우스를 한동안 안 쓰면 잠들어요. 같은 소켓을 열어 두니 VS Code 확장도 이 샤네루에 붙어요.
+//
+// 샤네루 말고 다른 펫도 띄울 수 있어요: pet.json + 스프라이트 시트 (docs/pet-format.md).
+// 혼자 실행할 때 펫을 찾는 순서: CHANELU_PET 환경 변수 → 앱 옆 PetData/pet.json 또는 pet.json
+// → 메뉴의 "펫 불러오기…"로 저장해 둔 펫 → 기본 샤네루.
 import AppKit
 
 signal(SIGPIPE, SIG_IGN)
@@ -13,7 +17,7 @@ signal(SIGPIPE, SIG_IGN)
 let args = CommandLine.arguments
 let standalone = args.count < 3
 let defaults = UserDefaults.standard
-let sheetPath = standalone ? (Bundle.main.path(forResource: "sheet", ofType: "png") ?? "sheet.png") : args[1]
+let builtinSheet = standalone ? (Bundle.main.path(forResource: "sheet", ofType: "png") ?? "sheet.png") : args[1]
 let sockPath = standalone
     ? (ProcessInfo.processInfo.environment["CHANELU_SOCKET"] ?? "/tmp/chanelu-\(getuid()).sock") // 테스트용으로 바꿀 수 있어요
     : args[2]
@@ -71,21 +75,204 @@ func quit() -> Never {
     exit(0)
 }
 
-// ---- 스프라이트 ----
-let FW = 110, FH = 145, COLS = 8, ROWS = 11
-enum Row: Int {
-    case idle = 0, look, happy, wave, hop, walkRight, walkLeft, beg, sit, sitBlink, sleep
+// ---- 펫 (스프라이트 시트 + 동작) ----
+// 프레임 번호는 시트를 왼쪽 위부터 가로로 읽은 순서예요: 번호 = 행 * 열개수 + 열.
+// dur이 nil이면 동작마다 정해진 기본 속도를 써요 (샤네루가 원래 움직이던 속도).
+struct Clip {
+    var frames: [Int]
+    var dur: Double?
+    var flip = false
 }
 
-func loadFrames() -> [[CGImage]] {
-    guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: sheetPath) as CFURL, nil),
-          let sheet = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+struct Pet {
+    var name: String
+    var fw: Int, fh: Int
+    var clips: [String: Clip]
+    var images: [Int: CGImage]
+    var builtin: Bool
+    /// pet.json 이 있던 폴더 (불러오기로 저장할 때 씀)
+    var source: URL?
+
+    func has(_ n: String) -> Bool { clips[n] != nil }
+    /// 이름 중 처음 있는 동작
+    func first(_ names: [String]) -> String? { names.first { clips[$0] != nil } }
+}
+
+struct PetError: Error { let message: String }
+
+func loadSheet(_ path: String) throws -> CGImage {
+    guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
+          let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+        throw PetError(message: "이미지를 읽을 수 없어요: \((path as NSString).lastPathComponent)")
+    }
+    return img
+}
+
+/// 시트에서 쓰는 프레임만 잘라 둬요. 시트 밖 번호는 빼요.
+func cutFrames(_ sheet: CGImage, fw: Int, fh: Int, cols: Int, clips: inout [String: Clip]) -> [Int: CGImage] {
+    let rows = sheet.height / fh
+    let total = cols * rows
+    var images: [Int: CGImage] = [:]
+    for (k, var c) in clips {
+        c.frames = c.frames.filter { $0 >= 0 && $0 < total && ($0 % cols + 1) * fw <= sheet.width }
+        if c.frames.isEmpty { clips[k] = nil; continue }
+        clips[k] = c
+        for i in c.frames where images[i] == nil {
+            images[i] = sheet.cropping(to: CGRect(x: (i % cols) * fw, y: (i / cols) * fh, width: fw, height: fh))
+        }
+    }
+    return images.compactMapValues { $0 }
+}
+
+/// 걷기는 오른쪽/왼쪽 두 방향이 필요해요. 한쪽만 있으면 좌우를 뒤집어서 써요.
+func resolveWalk(_ clips: inout [String: Clip], facingLeft: Bool) {
+    let walk = clips.removeValue(forKey: "walk")
+    var right = clips["walkRight"], left = clips["walkLeft"]
+    if let w = walk {
+        if facingLeft { if left == nil { left = w } } else { if right == nil { right = w } }
+    }
+    if right == nil, var l = left { l.flip.toggle(); right = l }
+    if left == nil, var r = right { r.flip.toggle(); left = r }
+    clips["walkRight"] = right
+    clips["walkLeft"] = left
+}
+
+/// 잠들기: sleepStart(눕기) → sleep(자는 중 반복) → wake(일어나기). wake가 없으면 sleepStart를 거꾸로.
+func resolveSleep(_ clips: inout [String: Clip]) {
+    if clips["wake"] == nil, var s = clips["sleepStart"], s.frames.count > 1 {
+        s.frames = Array(s.frames.dropLast().reversed())
+        clips["wake"] = s
+    }
+}
+
+/// 기본 샤네루: 8열 x 11행, 행마다 동작 하나
+func chaneluPet(sheetPath: String) throws -> Pet {
+    func row(_ r: Int, _ cols: [Int] = Array(0...7)) -> Clip { Clip(frames: cols.map { r * 8 + $0 }) }
+    var clips: [String: Clip] = [
+        "idle": row(0), "look": row(1), "happy": row(2), "wave": row(3), "jump": row(4),
+        "walkRight": row(5), "walkLeft": row(6), "beg": row(7), "sit": row(8), "sitBlink": row(9),
+        "sleepStart": row(10, Array(0...4)), "sleep": row(10, Array(4...7)), "wake": row(10, [3, 2, 1, 0]),
+        "drag": row(7, [2, 3, 4, 3]),
+    ]
+    let sheet = try loadSheet(sheetPath)
+    let images = cutFrames(sheet, fw: 110, fh: 145, cols: 8, clips: &clips)
+    return Pet(name: "꽃개 샤네루", fw: 110, fh: 145, clips: clips, images: images, builtin: true, source: nil)
+}
+
+/// pet.json 읽기. 경로가 폴더면 그 안의 pet.json.
+func loadPetJSON(_ url: URL) throws -> Pet {
+    var url = url
+    var isDir: ObjCBool = false
+    if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+        url = url.appendingPathComponent("pet.json")
+    }
+    guard let data = try? Data(contentsOf: url) else { throw PetError(message: "pet.json을 찾을 수 없어요") }
+    guard let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+        throw PetError(message: "pet.json 형식이 올바르지 않아요")
+    }
+    func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
+    if let v = num(j["version"]), v > 1 { throw PetError(message: "더 새 버전의 펫 파일이에요. 앱을 업데이트해 주세요") }
+    guard let sprite = j["sprite"] as? String, !sprite.isEmpty,
+          let fwD = num(j["frameWidth"]), let fhD = num(j["frameHeight"]) else {
+        throw PetError(message: "pet.json에 sprite, frameWidth, frameHeight가 필요해요")
+    }
+    let fw = Int(fwD), fh = Int(fhD)
+    guard fw > 0, fh > 0, fw <= 4096, fh <= 4096 else { throw PetError(message: "프레임 크기가 올바르지 않아요") }
+    guard !sprite.hasPrefix("/"), !sprite.split(separator: "/").contains("..") else {
+        throw PetError(message: "sprite는 pet.json과 같은 폴더 안의 파일이어야 해요")
+    }
+    let dir = url.deletingLastPathComponent()
+    let sheet = try loadSheet(dir.appendingPathComponent(sprite).path)
+    let cols = num(j["columns"]).map { Int($0) } ?? (sheet.width / fw)
+    guard cols > 0, sheet.height >= fh else { throw PetError(message: "이미지가 프레임 크기보다 작아요") }
+
+    var clips: [String: Clip] = [:]
+    for (k, v) in (j["animations"] as? [String: Any]) ?? [:] {
+        guard let a = v as? [String: Any], let fr = a["frames"] as? [Any] else { continue }
+        let frames = fr.compactMap { num($0).map { Int($0) } }
+        let fps = num(a["fps"]).flatMap { $0 > 0 ? $0 : nil }
+        clips[k] = Clip(frames: frames, dur: fps.map { 1 / min(60, $0) }, flip: (a["flip"] as? Bool) ?? false)
+    }
+    resolveWalk(&clips, facingLeft: (j["walkFacing"] as? String) == "left")
+    resolveSleep(&clips)
+    let images = cutFrames(sheet, fw: fw, fh: fh, cols: cols, clips: &clips)
+    if clips["idle"] == nil {
+        // 가만히 있는 동작이 없으면 아무 동작의 첫 프레임으로
+        guard let any = clips.keys.sorted().first.flatMap({ clips[$0] }) else {
+            throw PetError(message: "시트 안에 있는 프레임이 하나도 없어요. 프레임 크기와 번호를 확인해 주세요")
+        }
+        clips["idle"] = Clip(frames: [any.frames[0]], dur: nil, flip: any.flip)
+    }
+    let name = (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "내 펫"
+    return Pet(name: name, fw: fw, fh: fh, clips: clips, images: images, builtin: false, source: dir)
+}
+
+// ---- 펫 찾기 ----
+let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("Chanelu", isDirectory: true)
+let savedPetDir = supportDir.appendingPathComponent("Pet", isDirectory: true)
+
+/// 인터넷에서 받은 앱은 macOS가 임시 위치로 옮겨 실행해요(App Translocation). 그럴 때도 원래 위치를 찾아요.
+func originalAppURL() -> URL {
+    let url = Bundle.main.bundleURL
+    typealias IsFn = @convention(c) (CFURL, UnsafeMutablePointer<DarwinBoolean>, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> DarwinBoolean
+    typealias OrigFn = @convention(c) (CFURL, UnsafeMutablePointer<Unmanaged<CFError>?>?) -> Unmanaged<CFURL>?
+    guard let h = dlopen("/System/Library/Frameworks/Security.framework/Security", RTLD_LAZY),
+          let isSym = dlsym(h, "SecTranslocateIsTranslocatedURL"),
+          let origSym = dlsym(h, "SecTranslocateCreateOriginalPathForURL") else { return url }
+    var translocated: DarwinBoolean = false
+    guard unsafeBitCast(isSym, to: IsFn.self)(url as CFURL, &translocated, nil).boolValue, translocated.boolValue,
+          let orig = unsafeBitCast(origSym, to: OrigFn.self)(url as CFURL, nil) else { return url }
+    return orig.takeRetainedValue() as URL
+}
+
+/// 펫을 못 읽었을 때 알려 줄 말 (혼자 실행할 때 창으로 보여요)
+var loadWarning: String?
+
+func findPet() -> Pet {
+    var tries: [URL] = []
+    if !standalone {
+        // VS Code 확장: 첫 인자가 pet.json이면 그 펫, 아니면 샤네루 시트
+        if args[1].hasSuffix(".json") { tries.append(URL(fileURLWithPath: args[1])) }
+    } else {
+        if let env = ProcessInfo.processInfo.environment["CHANELU_PET"], !env.isEmpty {
+            tries.append(URL(fileURLWithPath: env))
+        }
+        let beside = originalAppURL().deletingLastPathComponent()
+        for p in ["PetData/pet.json", "pet.json"] {
+            let u = beside.appendingPathComponent(p)
+            if FileManager.default.fileExists(atPath: u.path) { tries.append(u); break }
+        }
+        let saved = savedPetDir.appendingPathComponent("pet.json")
+        if FileManager.default.fileExists(atPath: saved.path) { tries.append(saved) }
+    }
+    for u in tries {
+        do { return try loadPetJSON(u) } catch let e as PetError {
+            loadWarning = e.message
+            FileHandle.standardError.write("pet: \(u.path): \(e.message)\n".data(using: .utf8)!)
+        } catch {}
+    }
+    do { return try chaneluPet(sheetPath: builtinSheet) } catch {
         FileHandle.standardError.write("cannot load sheet\n".data(using: .utf8)!)
         exit(3)
     }
-    return (0..<ROWS).map { r in
-        (0..<COLS).map { c in sheet.cropping(to: CGRect(x: c * FW, y: r * FH, width: FW, height: FH))! }
-    }
+}
+
+/// 불러온 펫(pet.json + 시트)을 Application Support에 복사해 두고, 다음 실행부터 그 펫을 써요.
+func savePet(from dir: URL) throws {
+    let fm = FileManager.default
+    let json = dir.appendingPathComponent("pet.json")
+    guard let data = try? Data(contentsOf: json),
+          let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let sprite = j["sprite"] as? String else { throw PetError(message: "pet.json을 읽을 수 없어요") }
+    let tmp = supportDir.appendingPathComponent("Pet.tmp", isDirectory: true)
+    try? fm.removeItem(at: tmp)
+    let dst = tmp.appendingPathComponent(sprite)
+    try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try fm.copyItem(at: json, to: tmp.appendingPathComponent("pet.json"))
+    try fm.copyItem(at: dir.appendingPathComponent(sprite), to: dst)
+    try? fm.removeItem(at: savedPetDir)
+    try fm.moveItem(at: tmp, to: savedPetDir)
 }
 
 // ---- 창 ----
@@ -105,14 +292,13 @@ final class PupView: NSView {
 final class Controller {
     enum Mode { case idle, walk, busy, sleeping, dragging, falling }
     struct Anim {
-        var row: Row
-        var frames: [Int]
+        var clip: Clip
         var dur: Double
         var loop: Bool
         var onDone: (() -> Void)?
     }
 
-    let frames: [[CGImage]]
+    var current: Pet
     let window: PupWindow
     let view: PupView
     let dog = CALayer()
@@ -131,8 +317,8 @@ final class Controller {
     var dragOffset = CGPoint.zero
     var dragMoved = false
 
-    init(frames: [[CGImage]]) {
-        self.frames = frames
+    init(pet: Pet) {
+        current = pet
         window = PupWindow(contentRect: .zero, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -142,7 +328,7 @@ final class Controller {
         view = PupView(frame: .zero)
         view.wantsLayer = true
         view.layer?.backgroundColor = .clear
-        dog.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        dog.actions = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull(), "transform": NSNull()]
         dog.minificationFilter = .trilinear
         dog.contentsGravity = .resizeAspect
         view.layer?.addSublayer(dog)
@@ -178,18 +364,34 @@ final class Controller {
 
     func applySize() {
         h = cfgSize
-        w = CGFloat(FW) * cfgSize / CGFloat(FH)
+        w = CGFloat(current.fw) * cfgSize / CGFloat(current.fh)
         window.setContentSize(NSSize(width: w, height: h + headroom))
+        dog.transform = CATransform3DIdentity
         dog.frame = CGRect(x: 0, y: 0, width: w, height: h)
+        if let a = anim { setFrame(a.clip, a.clip.frames[fi]) }
+    }
+
+    /// 다른 펫으로 바꾸기 (메뉴의 펫 불러오기)
+    func setPet(_ p: Pet) {
+        current = p
+        anim = nil
+        applySize()
+        startIdle()
     }
 
     // ---- 애니메이션 ----
-    func setFrame(_ row: Row, _ col: Int) { dog.contents = frames[row.rawValue][col] }
+    func setFrame(_ c: Clip, _ i: Int) {
+        guard let img = current.images[i] else { return }
+        dog.contents = img
+        dog.transform = c.flip ? CATransform3DMakeScale(-1, 1, 1) : CATransform3DIdentity
+    }
 
-    func play(_ row: Row, frames f: [Int] = Array(0...7), dur: Double = 0.14, loop: Bool = false, onDone: (() -> Void)? = nil) {
-        anim = Anim(row: row, frames: f, dur: dur, loop: loop, onDone: onDone)
+    /// 동작 재생. 펫 파일에 fps가 있으면 그 속도, 없으면 동작별 기본 속도(dur).
+    func play(_ name: String, dur: Double, loop: Bool = false, onDone: (() -> Void)? = nil) {
+        guard let c = current.clips[name] ?? current.clips["idle"] else { return }
+        anim = Anim(clip: c, dur: c.dur ?? dur, loop: loop, onDone: onDone)
         fi = 0; ft = 0
-        setFrame(row, f[0])
+        setFrame(c, c.frames[0])
     }
 
     func advance(_ dt: Double) {
@@ -198,31 +400,37 @@ final class Controller {
         while ft >= a.dur {
             ft -= a.dur
             fi += 1
-            if fi >= a.frames.count {
+            if fi >= a.clip.frames.count {
                 if a.loop { fi = 0 } else {
-                    fi = a.frames.count - 1
+                    fi = a.clip.frames.count - 1
                     let done = a.onDone
                     a.onDone = nil
                     a.dur = .infinity
                     anim = a
-                    setFrame(a.row, a.frames[fi])
+                    setFrame(a.clip, a.clip.frames[fi])
                     done?()
                     return
                 }
             }
-            setFrame(a.row, a.frames[fi])
+            setFrame(a.clip, a.clip.frames[fi])
         }
     }
 
     // ---- 상태 ----
+    /// 시트에 없는 동작은 빼고, 있는 동작 중에서 골라요
+    func pick(_ names: [String], or fallback: String = "idle") -> String {
+        names.filter { current.has($0) }.randomElement() ?? fallback
+    }
+
     func startIdle() {
         mode = .idle
-        let row = [Row.idle, .idle, .look, .happy, .sit, .sitBlink].randomElement()!
         restUntil = CACurrentMediaTime() + 2 + Double.random(in: 0...5)
-        play(row, dur: 0.16, loop: true)
+        play(pick(["idle", "idle", "look", "happy", "sit", "sitBlink"]), dur: 0.16, loop: true)
     }
 
     func startWalk() {
+        // 걷는 동작이 없는 펫은 제자리에 있어요
+        guard current.has("walkRight") else { startIdle(); return }
         mode = .walk
         // 모니터가 여러 대면 가끔(25%) 옆 모니터로 놀러 가요. 가로로 이어진 화면이어야 걸어서 갈 수 있어요.
         var sf = screen().visibleFrame
@@ -234,7 +442,7 @@ final class Controller {
             sf = next.visibleFrame
             target = CGFloat.random(in: sf.minX...max(sf.minX + 1, sf.maxX - w))
             dir = target > x ? 1 : -1
-            play(dir > 0 ? .walkRight : .walkLeft, dur: 0.1, loop: true)
+            play(dir > 0 ? "walkRight" : "walkLeft", dur: 0.1, loop: true)
             return
         }
         let maxX = sf.maxX - w
@@ -242,33 +450,38 @@ final class Controller {
         // 너무 가까우면 좀 더 멀리
         if abs(target - x) < 60 { target = x < (sf.minX + maxX) / 2 ? min(maxX, x + 300) : max(sf.minX, x - 300) }
         dir = target > x ? 1 : -1
-        play(dir > 0 ? .walkRight : .walkLeft, dur: 0.1, loop: true)
+        play(dir > 0 ? "walkRight" : "walkLeft", dur: 0.1, loop: true)
     }
 
-    func trick(_ row: Row) {
+    func trick(_ name: String) {
         mode = .busy
-        play(row, dur: 0.11, onDone: { [unowned self] in self.startIdle() })
+        play(name, dur: 0.11, onDone: { [unowned self] in self.startIdle() })
     }
+
+    /// 깡충 (없으면 클릭 반응, 그것도 없으면 가만히)
+    var jump: String { current.first(["jump", "react", "happy"]) ?? "idle" }
 
     func fallAsleep() {
         if mode == .sleeping || mode == .dragging || mode == .falling { return }
         mode = .busy
-        play(.sleep, frames: Array(0...4), dur: 0.22, onDone: { [unowned self] in
+        let sleepLoop = { [unowned self] in
             self.mode = .sleeping
-            self.play(.sleep, frames: Array(4...7), dur: 0.45, loop: true)
-        })
+            self.play(self.current.has("sleep") ? "sleep" : "idle", dur: 0.45, loop: true)
+        }
+        if current.has("sleepStart") { play("sleepStart", dur: 0.22, onDone: sleepLoop) } else { sleepLoop() }
     }
 
     func wakeUp(_ then: @escaping () -> Void) {
         if mode != .sleeping { then(); return }
+        guard current.has("wake") else { then(); return }
         mode = .busy
-        play(.sleep, frames: [3, 2, 1, 0], dur: 0.15, onDone: then)
+        play("wake", dur: 0.15, onDone: then)
     }
 
     func pet() {
         lastInput = CACurrentMediaTime()
         popup("❤️", color: nil)
-        wakeUp { [unowned self] in self.trick([.hop, .wave, .beg, .happy].randomElement()!) }
+        wakeUp { [unowned self] in self.trick(self.pick(["react", "jump", "wave", "beg", "happy"], or: self.jump)) }
     }
 
     // ---- 효과 ----
@@ -308,7 +521,7 @@ final class Controller {
             dragMoved = true
             lastInput = CACurrentMediaTime()
             mode = .dragging
-            play(.beg, frames: [2, 3, 4, 3], dur: 0.12, loop: true)
+            play(current.first(["drag", "react", "jump"]) ?? "idle", dur: 0.12, loop: true)
         }
         let m = NSEvent.mouseLocation
         x = m.x - dragOffset.x
@@ -339,7 +552,7 @@ final class Controller {
             lastInput = CACurrentMediaTime()
             if !held {
                 popup("❤️", color: nil)
-                wakeUp { [unowned self] in self.trick(.hop) }
+                wakeUp { [unowned self] in self.trick(self.jump) }
             }
         case "attention":
             // AI가 확인/승인을 기다려요: "!" + 손 흔들기, 두 발 서기
@@ -348,12 +561,13 @@ final class Controller {
                 popup("❗️", color: nil)
                 wakeUp { [unowned self] in
                     self.mode = .busy
-                    self.play(.wave, dur: 0.11, onDone: { [unowned self] in self.trick(.beg) })
+                    let first = self.current.first(["wave", "react"]) ?? self.jump
+                    self.play(first, dur: 0.11, onDone: { [unowned self] in self.trick(self.current.first(["beg"]) ?? "idle") })
                 }
             }
         case "saved":
             lastInput = CACurrentMediaTime()
-            if !held { wakeUp { [unowned self] in self.trick(.hop) } }
+            if !held { wakeUp { [unowned self] in self.trick(self.jump) } }
         case "pet":
             if !held { pet() }
         case "sleep":
@@ -395,7 +609,7 @@ final class Controller {
         case .falling:
             vy -= 2400 * CGFloat(dt)
             y += vy * CGFloat(dt)
-            if y <= sf.minY { y = sf.minY; vy = 0; trick(.hop) }
+            if y <= sf.minY { y = sf.minY; vy = 0; trick(jump) }
         default:
             break
         }
@@ -496,6 +710,14 @@ final class Server {
 }
 
 // ---- 메뉴 막대 (혼자 실행할 때만) ----
+func alert(_ title: String, _ text: String) {
+    NSApp.activate(ignoringOtherApps: true)
+    let a = NSAlert()
+    a.messageText = title
+    a.informativeText = text
+    a.runModal()
+}
+
 final class MenuTarget: NSObject {
     let ctl: Controller
     var sizeItems: [NSMenuItem] = []
@@ -516,6 +738,33 @@ final class MenuTarget: NSObject {
         defaults.set(Double(item.tag), forKey: "sleepAfter")
         refresh()
     }
+    /// pet.json(또는 그게 든 폴더)을 골라 펫을 바꾸고, 다음에 켤 때도 그 펫이 나오게 저장해요
+    @objc func importPet() {
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSOpenPanel()
+        panel.message = "pet.json 파일이나, pet.json이 들어 있는 폴더를 골라 주세요"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.allowedFileTypes = ["json"]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let p = try loadPetJSON(url)
+            if let dir = p.source { try savePet(from: dir) }
+            ctl.setPet(p)
+            setupMenuBar(ctl)
+        } catch let e as PetError {
+            alert("펫을 불러오지 못했어요", e.message)
+        } catch {
+            alert("펫을 저장하지 못했어요", error.localizedDescription)
+        }
+    }
+    @objc func resetPet() {
+        try? FileManager.default.removeItem(at: savedPetDir)
+        guard let p = try? chaneluPet(sheetPath: builtinSheet) else { return }
+        ctl.setPet(p)
+        setupMenuBar(ctl)
+    }
     func refresh() {
         for i in sizeItems { i.state = CGFloat(i.tag) == cfgSize ? .on : .off }
         for i in sleepItems { i.state = Double(i.tag) == cfgSleep ? .on : .off }
@@ -525,12 +774,17 @@ final class MenuTarget: NSObject {
 var statusItem: NSStatusItem?
 var menuTarget: MenuTarget?
 
+/// 메뉴 막대 아이콘과 메뉴. 펫을 바꾸면 다시 만들어요.
 func setupMenuBar(_ ctl: Controller) {
     let t = MenuTarget(ctl: ctl)
-    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    let icon = NSImage(cgImage: ctl.frames[Row.idle.rawValue][0], size: NSSize(width: 15, height: 20))
-    item.button?.image = icon
-    item.button?.toolTip = "꽃개 샤네루"
+    let item = statusItem ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    let p = ctl.current
+    if let first = p.clips["idle"]?.frames.first, let img = p.images[first] {
+        // 높이 20pt에 맞추고, 너무 넓으면 22pt로 줄여요
+        let ih: CGFloat = 20, iw = min(22, ih * CGFloat(p.fw) / CGFloat(p.fh))
+        item.button?.image = NSImage(cgImage: img, size: NSSize(width: iw, height: iw * CGFloat(p.fh) / CGFloat(p.fw)))
+    }
+    item.button?.toolTip = p.name
 
     let menu = NSMenu()
     func add(_ title: String, _ action: Selector, to m: NSMenu = menu, tag: Int = 0, key: String = "") -> NSMenuItem {
@@ -540,7 +794,7 @@ func setupMenuBar(_ ctl: Controller) {
         m.addItem(i)
         return i
     }
-    let header = NSMenuItem(title: "꽃개 샤네루", action: nil, keyEquivalent: "")
+    let header = NSMenuItem(title: p.name, action: nil, keyEquivalent: "")
     header.isEnabled = false
     menu.addItem(header)
     menu.addItem(.separator())
@@ -564,6 +818,9 @@ func setupMenuBar(_ ctl: Controller) {
     menu.addItem(sleepRoot)
 
     menu.addItem(.separator())
+    _ = add("펫 불러오기…", #selector(MenuTarget.importPet))
+    if !p.builtin { _ = add("샤네루로 되돌리기", #selector(MenuTarget.resetPet)) }
+    menu.addItem(.separator())
     _ = add("종료", #selector(MenuTarget.quitApp), key: "q")
     item.menu = menu
     t.refresh()
@@ -574,7 +831,7 @@ func setupMenuBar(_ ctl: Controller) {
 // ---- 시작 ----
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory) // Dock 아이콘 없이
-let ctl = Controller(frames: loadFrames())
+let ctl = Controller(pet: findPet())
 let server = Server(path: sockPath) { line, fd in
     if line == "version" {
         // VS Code 확장이 버전을 물어보면 답해요. 예전 버전이면 확장이 새 버전으로 바꿔 띄워요.
@@ -584,7 +841,12 @@ let server = Server(path: sockPath) { line, fd in
         ctl.handle(line)
     }
 }
-if standalone { setupMenuBar(ctl) }
+if standalone {
+    setupMenuBar(ctl)
+    if let w = loadWarning {
+        DispatchQueue.main.async { alert("펫을 불러오지 못했어요", w + (ctl.current.builtin ? "\n대신 샤네루가 나왔어요." : "")) }
+    }
+}
 
 let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { _ in
     ctl.tick()
