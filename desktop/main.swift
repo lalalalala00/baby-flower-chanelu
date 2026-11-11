@@ -104,6 +104,9 @@ struct Pet {
 
 struct PetError: Error { let message: String }
 
+/// pet.json에 이름이 없을 때
+let defaultPetName = "샤네루친구"
+
 func loadSheet(_ path: String) throws -> CGImage {
     guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
           let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
@@ -207,7 +210,7 @@ func loadPetJSON(_ url: URL) throws -> Pet {
         }
         clips["idle"] = Clip(frames: [any.frames[0]], dur: nil, flip: any.flip)
     }
-    let name = (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "내 펫"
+    let name = (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? defaultPetName
     return Pet(name: name, fw: fw, fh: fh, clips: clips, images: images, builtin: false, source: dir)
 }
 
@@ -234,8 +237,27 @@ func originalAppURL() -> URL {
 /// 펫을 못 읽었을 때 알려 줄 말 (혼자 실행할 때 창으로 보여요)
 var loadWarning: String?
 
-/// 펫을 목록에 넣고 id를 돌려줘요. 이미 있으면 그대로 (isNew = false).
-func addToLibrary(_ dir: URL) throws -> (id: String, isNew: Bool) {
+enum DupChoice { case replace, add, cancel }
+
+/// 이름이 같은 펫이 이미 목록에 있을 때 물어봐요
+func askDuplicate(_ name: String) -> DupChoice {
+    NSApp.activate(ignoringOtherApps: true)
+    let a = NSAlert()
+    a.messageText = "'\(name)'이(가) 이미 있어요."
+    a.informativeText = "새로 받은 펫으로 바꿀까요?\n따로 추가하면 둘 다 펫 목록에 남아요."
+    a.addButton(withTitle: "바꾸기")
+    a.addButton(withTitle: "따로 추가하기")
+    a.addButton(withTitle: "취소")
+    switch a.runModal() {
+    case .alertFirstButtonReturn: return .replace
+    case .alertSecondButtonReturn: return .add
+    default: return .cancel
+    }
+}
+
+/// 펫을 목록에 넣고 id를 돌려줘요. 내용까지 똑같은 펫이 있으면 그대로 (isNew = false).
+/// 이름만 같은 펫이 있으면 ask로 물어봐요: 바꾸기(예전 것을 지움) / 따로 추가 / 취소(nil).
+func addToLibrary(_ dir: URL, name: String, ask: (String) -> DupChoice) throws -> (id: String, isNew: Bool)? {
     let fm = FileManager.default
     let json = dir.appendingPathComponent("pet.json")
     let data = try Data(contentsOf: json)
@@ -246,6 +268,14 @@ func addToLibrary(_ dir: URL) throws -> (id: String, isNew: Bool) {
     let id = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     let dst = petsDir.appendingPathComponent(id, isDirectory: true)
     if fm.fileExists(atPath: dst.appendingPathComponent("pet.json").path) { return (id, false) }
+    var replaceID: String?
+    if let same = libraryEntries().last(where: { $0.name == name }) {
+        switch ask(name) {
+        case .replace: replaceID = same.id
+        case .add: break
+        case .cancel: return nil
+        }
+    }
     let tmp = petsDir.appendingPathComponent(".\(id).tmp", isDirectory: true)
     try? fm.removeItem(at: tmp)
     let spriteDst = tmp.appendingPathComponent(sprite)
@@ -254,10 +284,23 @@ func addToLibrary(_ dir: URL) throws -> (id: String, isNew: Bool) {
     try spriteData.write(to: spriteDst)
     try? fm.removeItem(at: dst)
     try fm.moveItem(at: tmp, to: dst)
+    if let r = replaceID { try? fm.removeItem(at: petsDir.appendingPathComponent(r, isDirectory: true)) }
     return (id, true)
 }
 
 struct LibraryEntry { let id: String; let name: String; let added: Date }
+
+/// 메뉴에 보일 이름. 같은 이름이 여러 개면 두 번째부터 "이름 (2)"처럼.
+func displayNames(_ lib: [LibraryEntry]) -> [String: String] {
+    var seen: [String: Int] = [:]
+    var out: [String: String] = [:]
+    for e in lib {
+        let n = (seen[e.name] ?? 0) + 1
+        seen[e.name] = n
+        out[e.id] = n == 1 ? e.name : "\(e.name) (\(n))"
+    }
+    return out
+}
 
 /// 목록에 있는 펫들 (넣은 순서)
 func libraryEntries() -> [LibraryEntry] {
@@ -266,7 +309,7 @@ func libraryEntries() -> [LibraryEntry] {
     return dirs.compactMap { d -> LibraryEntry? in
         guard let data = try? Data(contentsOf: d.appendingPathComponent("pet.json")),
               let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
-        let name = (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "내 펫"
+        let name = (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? defaultPetName
         let added = (try? d.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
         return LibraryEntry(id: d.lastPathComponent, name: name, added: added)
     }.sorted { $0.added < $1.added }
@@ -293,16 +336,18 @@ func findPet() -> Pet {
         if let env = ProcessInfo.processInfo.environment["CHANELU_PET"], !env.isEmpty {
             do { return try loadPetJSON(URL(fileURLWithPath: env)) } catch { report(env, error) }
         }
-        // 앱 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요.
-        // 이미 목록에 있는 펫이면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
+        // 앱 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요. (이름이 같은 펫이 있으면 물어봐요)
+        // 이미 목록에 있는 펫이거나 취소했으면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
         let beside = originalAppURL().deletingLastPathComponent()
         for rel in ["PetData/pet.json", "pet.json"] {
             let u = beside.appendingPathComponent(rel)
             guard FileManager.default.fileExists(atPath: u.path) else { continue }
             do {
                 var p = try loadPetJSON(u)
-                guard let dir = p.source, let added = try? addToLibrary(dir) else { return p } // 복사 못 하면 이번만 띄워요
-                if added.isNew || defaults.string(forKey: "pet") == nil {
+                guard let dir = p.source else { return p }
+                let result: (id: String, isNew: Bool)?
+                do { result = try addToLibrary(dir, name: p.name, ask: askDuplicate) } catch { return p } // 복사 못 하면 이번만 띄워요
+                if let added = result, added.isNew || defaults.string(forKey: "pet") == nil {
                     p.id = added.id
                     defaults.set(added.id, forKey: "pet")
                     return p
@@ -847,7 +892,8 @@ func setupMenuBar(_ ctl: Controller) {
     // 펫 바꾸기: 기본 샤네루 + 목록의 펫들. 지금 펫이 아닌 펫은 지울 수 있어요.
     let lib = libraryEntries()
     let petMenu = NSMenu()
-    let choices = [("", "꽃개 샤네루")] + lib.map { ($0.id, $0.name) }
+    let names = displayNames(lib)
+    let choices = [("", "꽃개 샤네루")] + lib.map { ($0.id, names[$0.id] ?? $0.name) }
     for (id, name) in choices {
         let i = add(name, #selector(MenuTarget.selectPet(_:)), to: petMenu)
         i.representedObject = id
@@ -858,7 +904,7 @@ func setupMenuBar(_ ctl: Controller) {
         petMenu.addItem(.separator())
         let removeMenu = NSMenu()
         for e in removable {
-            let i = add(e.name, #selector(MenuTarget.removePet(_:)), to: removeMenu)
+            let i = add(names[e.id] ?? e.name, #selector(MenuTarget.removePet(_:)), to: removeMenu)
             i.representedObject = e.id
         }
         let removeRoot = NSMenuItem(title: "목록에서 지우기", action: nil, keyEquivalent: "")

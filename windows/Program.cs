@@ -95,13 +95,16 @@ namespace Chanelu
     static class PetLoader
     {
         /// <summary>펫 목록: Pets\<id>\pet.json + 시트. id는 파일 내용으로 정해서 같은 펫은 한 번만 들어가요.</summary>
+        /// <summary>pet.json에 이름이 없을 때</summary>
+        public const string DefaultName = "샤네루친구";
+
         public static string PetsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Chanelu", "Pets");
 
         public static PetDef Find(string[] args, Settings settings, out string warning)
         {
             warning = null;
-            // 실행 인자나 exe 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요.
-            // 이미 목록에 있는 펫이면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
+            // 실행 인자나 exe 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요. (이름이 같은 펫이 있으면 물어봐요)
+            // 이미 목록에 있는 펫이거나 취소했으면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
             string beside = null;
             if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])) beside = args[0];
             else
@@ -114,13 +117,13 @@ namespace Chanelu
                 try
                 {
                     var p = FromJson(beside);
-                    string id; bool isNew;
-                    try { (id, isNew) = AddToLibrary(p.SourceDir); }
+                    (string id, bool isNew)? result;
+                    try { result = AddToLibrary(p.SourceDir, p.Name, AskDuplicate); }
                     catch { return p; } // 복사 못 하면 이번만 띄워요
-                    if (isNew || settings.Pet == null)
+                    if (result.HasValue && (result.Value.isNew || settings.Pet == null))
                     {
-                        p.Id = id;
-                        settings.Pet = id;
+                        p.Id = result.Value.id;
+                        settings.Pet = p.Id;
                         settings.Save();
                         return p;
                     }
@@ -136,8 +139,49 @@ namespace Chanelu
             return Chanelu();
         }
 
-        /// <summary>펫을 목록에 넣고 id를 돌려줘요. 이미 있으면 그대로 (isNew = false).</summary>
-        public static (string id, bool isNew) AddToLibrary(string dir)
+        public enum DupChoice { Replace, Add, Cancel }
+
+        /// <summary>이름이 같은 펫이 이미 목록에 있을 때 물어봐요</summary>
+        public static DupChoice AskDuplicate(string name)
+        {
+            var choice = DupChoice.Cancel;
+            using (var f = new Form
+            {
+                Text = "꽃개 샤네루",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterScreen,
+                MinimizeBox = false,
+                MaximizeBox = false,
+                TopMost = true,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Padding = new Padding(16),
+                Font = SystemFonts.MessageBoxFont,
+            })
+            {
+                var layout = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill };
+                layout.Controls.Add(new Label { Text = $"'{name}'이(가) 이미 있어요.\n새로 받은 펫으로 바꿀까요?\n따로 추가하면 둘 다 펫 목록에 남아요.", AutoSize = true, Margin = new Padding(0, 0, 0, 12) });
+                var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+                foreach (var (text, c) in new[] { ("바꾸기", DupChoice.Replace), ("따로 추가하기", DupChoice.Add), ("취소", DupChoice.Cancel) })
+                {
+                    var b = new Button { Text = text, AutoSize = true, MinimumSize = new Size(88, 0) };
+                    b.Click += (_, __) => { choice = c; f.Close(); };
+                    buttons.Controls.Add(b);
+                    if (c == DupChoice.Replace) f.AcceptButton = b;
+                    if (c == DupChoice.Cancel) f.CancelButton = b;
+                }
+                layout.Controls.Add(buttons);
+                f.Controls.Add(layout);
+                f.ShowDialog();
+            }
+            return choice;
+        }
+
+        /// <summary>
+        /// 펫을 목록에 넣고 id를 돌려줘요. 내용까지 똑같은 펫이 있으면 그대로 (isNew = false).
+        /// 이름만 같은 펫이 있으면 ask로 물어봐요: 바꾸기(예전 것을 지움) / 따로 추가 / 취소(null).
+        /// </summary>
+        public static (string id, bool isNew)? AddToLibrary(string dir, string name, Func<string, DupChoice> ask)
         {
             var jsonBytes = File.ReadAllBytes(Path.Combine(dir, "pet.json"));
             var j = new JavaScriptSerializer().DeserializeObject(System.Text.Encoding.UTF8.GetString(jsonBytes)) as Dictionary<string, object>;
@@ -152,6 +196,14 @@ namespace Chanelu
             }
             var dst = Path.Combine(PetsDir, id);
             if (File.Exists(Path.Combine(dst, "pet.json"))) return (id, false);
+            string replaceId = null;
+            var same = Library().LastOrDefault(e => e.name == name);
+            if (same.id != null)
+            {
+                var c = ask(name);
+                if (c == DupChoice.Cancel) return null;
+                if (c == DupChoice.Replace) replaceId = same.id;
+            }
             var tmp = Path.Combine(PetsDir, "." + id + ".tmp");
             if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
             var spriteDst = Path.Combine(tmp, sprite);
@@ -160,6 +212,7 @@ namespace Chanelu
             File.WriteAllBytes(spriteDst, spriteBytes);
             if (Directory.Exists(dst)) Directory.Delete(dst, true);
             Directory.Move(tmp, dst);
+            if (replaceId != null) try { Directory.Delete(Path.Combine(PetsDir, replaceId), true); } catch { }
             return (id, true);
         }
 
@@ -176,11 +229,24 @@ namespace Chanelu
                 {
                     var j = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(d, "pet.json"))) as Dictionary<string, object>;
                     var name = j != null && j.TryGetValue("name", out var n) ? n as string : null;
-                    list.Add((id, string.IsNullOrWhiteSpace(name) ? "내 펫" : name, Directory.GetCreationTimeUtc(d)));
+                    list.Add((id, string.IsNullOrWhiteSpace(name) ? PetLoader.DefaultName : name, Directory.GetCreationTimeUtc(d)));
                 }
                 catch { }
             }
             return list.OrderBy(e => e.Item3).Select(e => (e.Item1, e.Item2)).ToList();
+        }
+
+        /// <summary>메뉴에 보일 이름. 같은 이름이 여러 개면 두 번째부터 "이름 (2)"처럼.</summary>
+        public static Dictionary<string, string> DisplayNames(List<(string id, string name)> lib)
+        {
+            var seen = new Dictionary<string, int>();
+            var outp = new Dictionary<string, string>();
+            foreach (var (id, name) in lib)
+            {
+                seen[name] = seen.TryGetValue(name, out var n) ? n + 1 : 1;
+                outp[id] = seen[name] == 1 ? name : $"{name} ({seen[name]})";
+            }
+            return outp;
         }
 
         public static PetDef LoadLibraryPet(string id)
@@ -264,7 +330,7 @@ namespace Chanelu
 
             var pet = new PetDef { FW = fw, FH = fh, Cols = cols, Sheet = sheet, SourceDir = dir };
             pet.Name = Get(j, "name") as string;
-            if (string.IsNullOrWhiteSpace(pet.Name)) pet.Name = "내 펫";
+            if (string.IsNullOrWhiteSpace(pet.Name)) pet.Name = PetLoader.DefaultName;
 
             if (Get(j, "animations") is Dictionary<string, object> anims)
             {
@@ -779,8 +845,9 @@ namespace Chanelu
         {
             petMenu.DropDownItems.Clear();
             var lib = PetLoader.Library();
+            var names = PetLoader.DisplayNames(lib);
             var current = pet.Id ?? (pet.Builtin ? "" : null);
-            foreach (var (id, name) in new[] { ("", "꽃개 샤네루") }.Concat(lib))
+            foreach (var (id, name) in new[] { ("", "꽃개 샤네루") }.Concat(lib.Select(e => (e.id, names[e.id]))))
             {
                 var item = new ToolStripMenuItem(name) { Checked = id == current };
                 item.Click += (_, __) => SelectPet(id);
@@ -791,8 +858,11 @@ namespace Chanelu
             {
                 petMenu.DropDownItems.Add(new ToolStripSeparator());
                 var remove = new ToolStripMenuItem("목록에서 지우기");
-                foreach (var (id, name) in removable)
+                foreach (var (id, _) in removable)
+                {
+                    var name = names[id];
                     remove.DropDownItems.Add(name, null, (_, __) => RemovePet(id, name));
+                }
                 petMenu.DropDownItems.Add(remove);
             }
         }
