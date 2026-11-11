@@ -13,7 +13,7 @@ Chanelu, a fluffy little flower puppy, walks along the bottom of your screen whi
 
 ## VS Code 없이 쓰기 · Without VS Code
 
-[**릴리스 페이지**](https://github.com/lalalalala00/baby-flower-chanelu/releases/latest)에서 내려받아 바로 실행하면 돼요. 설치는 필요 없어요.
+[**릴리스 페이지**](https://github.com/lalalalala00/baby-flower-chanelu/releases/latest)에서 내려받아 바로 실행하면 돼요. 처음 실행할 때 응용 프로그램 폴더로 옮길지(윈도우는 설치할지) 물어봐요.
 
 | | 파일 | 처음 실행할 때 |
 |---|---|---|
@@ -22,6 +22,7 @@ Chanelu, a fluffy little flower puppy, walks along the bottom of your screen whi
 
 - 맥은 메뉴 막대, 윈도우는 작업 표시줄 트레이의 샤네루 아이콘에서 쓰다듬기·재우기·크기·종료를 할 수 있어요.
 - 키보드·마우스를 한동안 안 쓰면 잠들고, 다시 쓰면 깨어나요.
+- 샤네루 말고 다른 펫도 띄울 수 있어요. 펫 파일(`.chanelupet`)을 더블클릭하면 펫 목록에 들어가고, 메뉴의 **펫 바꾸기**에서 고를 수 있어요. ([펫 파일 형식](https://github.com/lalalalala00/baby-flower-chanelu/blob/main/docs/pet-format.md))
 - 윈도우는 트레이 메뉴에서 **윈도우 시작할 때 실행**을 켤 수 있어요. 맥은 **시스템 설정 → 일반 → 로그인 항목**에 Chanelu.app을 추가하세요.
 
 Download `Chanelu-mac.zip` (macOS) or `Chanelu.exe` (Windows 10/11) from the [latest release](https://github.com/lalalalala00/baby-flower-chanelu/releases/latest). The apps are not code-signed, so the OS will warn on first launch.
