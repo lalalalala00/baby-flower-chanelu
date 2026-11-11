@@ -11,6 +11,7 @@
 // 혼자 실행할 때 펫을 찾는 순서: CHANELU_PET 환경 변수 → 앱 옆 PetData/pet.json 또는 pet.json
 // → 메뉴 "펫 바꾸기"에서 마지막으로 고른 펫 → 기본 샤네루.
 // 앱 옆에서 찾은 펫은 펫 목록(~/Library/Application Support/Chanelu/Pets)에 복사돼서 계속 고를 수 있어요.
+// 펫 파일(.chanelupet = pet.json + 시트를 묶은 zip)을 더블클릭해도 목록에 들어가요.
 import AppKit
 import CryptoKit
 
@@ -804,6 +805,102 @@ final class Server {
     }
 }
 
+// ---- 펫 파일 (.chanelupet) ----
+/// zip 풀기. 폴더 밖으로 나가는 경로가 들어 있으면 거절해요.
+func unzipPet(_ file: URL, to dir: URL) throws {
+    func run(_ args: [String]) throws -> String {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        p.arguments = args
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        try p.run()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw PetError(message: "펫 파일이 손상됐어요. 다시 받아 주세요") }
+        return String(decoding: data, as: UTF8.self)
+    }
+    let entries = try run(["-Z1", file.path]).split(separator: "\n").map(String.init)
+    guard !entries.isEmpty, entries.count < 100 else { throw PetError(message: "펫 파일이 올바르지 않아요") }
+    for e in entries where e.hasPrefix("/") || e.split(separator: "/").contains("..") {
+        throw PetError(message: "펫 파일이 올바르지 않아요")
+    }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    _ = try run(["-q", "-o", file.path, "-d", dir.path])
+}
+
+/// 펫 파일을 열어 목록에 넣고 그 펫으로 바꿔요. 이름이 같은 펫이 있으면 물어봐요.
+func openPetFile(_ url: URL, ctl: Controller) {
+    let fm = FileManager.default
+    let tmp = fm.temporaryDirectory.appendingPathComponent("chanelupet-\(UUID().uuidString)", isDirectory: true)
+    defer { try? fm.removeItem(at: tmp) }
+    do {
+        try unzipPet(url, to: tmp)
+        // pet.json이 맨 위에 있거나, 폴더 하나 안에 있어요
+        var dir = tmp
+        if !fm.fileExists(atPath: tmp.appendingPathComponent("pet.json").path),
+           let sub = try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+               .first(where: { fm.fileExists(atPath: $0.appendingPathComponent("pet.json").path) }) {
+            dir = sub
+        }
+        let p = try loadPetJSON(dir)
+        guard let added = try addToLibrary(dir, name: p.name, ask: askDuplicate) else { return }
+        let lp = try loadLibraryPet(added.id)
+        defaults.set(added.id, forKey: "pet")
+        ctl.setPet(lp)
+        setupMenuBar(ctl)
+    } catch {
+        alert("펫을 추가하지 못했어요", (error as? PetError)?.message ?? error.localizedDescription)
+    }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    let ctl: Controller
+    init(ctl: Controller) { self.ctl = ctl }
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard standalone else { return }
+        for u in urls where u.pathExtension.lowercased() == "chanelupet" { openPetFile(u, ctl: ctl) }
+    }
+}
+
+// ---- 응용 프로그램 폴더로 옮기기 ----
+/// 다운로드 폴더 같은 데서 실행했으면, 응용 프로그램 폴더로 옮길지 한 번 물어봐요.
+/// 앱이 한 군데에 있어야 펫 파일을 더블클릭했을 때 늘 같은 앱이 열려요.
+func offerMoveToApplications() {
+    let fm = FileManager.default
+    let here = originalAppURL()
+    let path = here.standardizedFileURL.path
+    guard here.pathExtension == "app",
+          !path.hasPrefix("/Applications/"),
+          !path.hasPrefix(NSHomeDirectory() + "/Applications/"),
+          !defaults.bool(forKey: "dontAskMove") else { return }
+    NSApp.activate(ignoringOtherApps: true)
+    let a = NSAlert()
+    a.messageText = "샤네루를 응용 프로그램 폴더로 옮길까요?"
+    a.informativeText = "옮겨 두면 펫 파일(.chanelupet)을 더블클릭해서 펫을 추가할 수 있고, 받은 폴더를 지워도 괜찮아요."
+    a.addButton(withTitle: "옮기기")
+    a.addButton(withTitle: "이대로 쓰기")
+    guard a.runModal() == .alertFirstButtonReturn else {
+        defaults.set(true, forKey: "dontAskMove")
+        return
+    }
+    let dst = URL(fileURLWithPath: "/Applications/Chanelu.app")
+    do {
+        if fm.fileExists(atPath: dst.path) { try fm.trashItem(at: dst, resultingItemURL: nil) } // 예전 버전은 휴지통으로
+        try fm.copyItem(at: here, to: dst)
+    } catch {
+        alert("옮기지 못했어요", "응용 프로그램 폴더에 쓸 수 없어요. 직접 끌어다 옮겨 주세요.\n(\(error.localizedDescription))")
+        return
+    }
+    try? fm.trashItem(at: here, resultingItemURL: nil) // 원래 자리의 앱은 휴지통으로 (못 지우면 그대로)
+    // 옮긴 앱을 새로 띄우면 이 앱에게서 자리를 넘겨받아요
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    p.arguments = ["-n", dst.path]
+    try? p.run()
+}
+
 // ---- 메뉴 막대 (혼자 실행할 때만) ----
 func alert(_ title: String, _ text: String) {
     NSApp.activate(ignoringOtherApps: true)
@@ -956,10 +1053,13 @@ let server = Server(path: sockPath) { line, fd in
         ctl.handle(line)
     }
 }
+let appDelegate = AppDelegate(ctl: ctl)
+app.delegate = appDelegate
 if standalone {
     setupMenuBar(ctl)
-    if let w = loadWarning {
-        DispatchQueue.main.async { alert("펫을 불러오지 못했어요", w + (ctl.current.builtin ? "\n대신 샤네루가 나왔어요." : "")) }
+    DispatchQueue.main.async {
+        if let w = loadWarning { alert("펫을 불러오지 못했어요", w + (ctl.current.builtin ? "\n대신 샤네루가 나왔어요." : "")) }
+        offerMoveToApplications()
     }
 }
 

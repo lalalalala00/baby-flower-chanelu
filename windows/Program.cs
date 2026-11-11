@@ -6,6 +6,7 @@
 // 펫을 찾는 순서: 실행 인자(pet.json 경로, exe에 끌어다 놓기) 또는 exe 옆 PetData\pet.json, pet.json
 // → 메뉴 "펫 바꾸기"에서 마지막으로 고른 펫 → 기본 샤네루.
 // 새로 찾은 펫은 펫 목록(%APPDATA%\Chanelu\Pets)에 복사돼서 계속 고를 수 있어요.
+// 펫 파일(.chanelupet = pet.json + 시트를 묶은 zip)을 더블클릭해도 목록에 들어가요.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -15,6 +16,8 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.IO;
+using System.IO.Compression;
+using System.Reflection;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -132,7 +135,17 @@ namespace Chanelu
             // 실행 인자나 exe 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요. (이름이 같은 펫이 있으면 물어봐요)
             // 이미 목록에 있는 펫이거나 취소했으면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
             string beside = null;
-            if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])) beside = args[0];
+            if (args.Length > 0 && args[0].EndsWith(".chanelupet", StringComparison.OrdinalIgnoreCase))
+            {
+                // 펫 파일을 더블클릭해서 열었어요
+                try
+                {
+                    var opened = OpenPetFile(args[0], settings);
+                    if (opened != null) return opened;
+                }
+                catch (Exception e) { warning = e.Message; }
+            }
+            else if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])) beside = args[0];
             else
             {
                 var exeDir = Path.GetDirectoryName(Application.ExecutablePath);
@@ -163,6 +176,46 @@ namespace Chanelu
                 catch (Exception e) { warning = e.Message; }
             }
             return Chanelu();
+        }
+
+        /// <summary>
+        /// 펫 파일(.chanelupet)을 풀어서 목록에 넣고, 그 펫을 돌려줘요. 취소하면 null.
+        /// zip 안에 폴더 밖을 가리키는 경로가 있으면 거절해요.
+        /// </summary>
+        public static PetDef OpenPetFile(string file, Settings settings)
+        {
+            var tmp = Path.Combine(Path.GetTempPath(), "chanelupet-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                try
+                {
+                    using (var z = ZipFile.OpenRead(file))
+                    {
+                        if (z.Entries.Count == 0 || z.Entries.Count >= 100) throw new PetException("펫 파일이 올바르지 않아요");
+                        foreach (var e in z.Entries)
+                            if (!SafeRelative(e.FullName)) throw new PetException("펫 파일이 올바르지 않아요");
+                    }
+                    ZipFile.ExtractToDirectory(file, tmp);
+                }
+                catch (PetException) { throw; }
+                catch { throw new PetException("펫 파일이 손상됐어요. 다시 받아 주세요"); }
+
+                // pet.json이 맨 위에 있거나, 폴더 하나 안에 있어요
+                var dir = File.Exists(Path.Combine(tmp, "pet.json")) ? tmp
+                    : Directory.GetDirectories(tmp).FirstOrDefault(d => File.Exists(Path.Combine(d, "pet.json"))) ?? tmp;
+                var check = FromJson(dir);
+                var name = check.Name;
+                check.Sheet.Dispose();
+                var r = AddToLibrary(dir, name, AskDuplicate);
+                if (r == null) return null;
+                settings.Pet = r.Value.id;
+                settings.Save();
+                return LoadLibraryPet(r.Value.id);
+            }
+            finally
+            {
+                try { if (Directory.Exists(tmp)) Directory.Delete(tmp, true); } catch { }
+            }
         }
 
         public enum DupChoice { Replace, Add, Cancel }
@@ -413,6 +466,8 @@ namespace Chanelu
         public int SleepAfter = 120;
         /// <summary>마지막으로 고른 펫 id. ""는 기본 샤네루, null은 아직 고른 적 없음.</summary>
         public string Pet;
+        /// <summary>설치하지 않고 쓰겠다고 했어요 (다시 묻지 않아요)</summary>
+        public bool NoInstall;
 
         static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Chanelu", "settings.txt");
 
@@ -428,6 +483,7 @@ namespace Chanelu
                     if (kv.Length != 2 || !int.TryParse(kv[1].Trim(), out int v)) continue;
                     if (kv[0].Trim() == "size") s.Size = Math.Max(40, Math.Min(300, v));
                     if (kv[0].Trim() == "sleep") s.SleepAfter = Math.Max(0, v);
+                    if (kv[0].Trim() == "noinstall") s.NoInstall = v != 0;
                 }
             }
             catch { /* 처음 실행 */ }
@@ -439,7 +495,83 @@ namespace Chanelu
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
-                File.WriteAllText(FilePath, $"size={Size}\nsleep={SleepAfter}\n" + (Pet != null ? $"pet={Pet}\n" : ""));
+                File.WriteAllText(FilePath, $"size={Size}\nsleep={SleepAfter}\n" + (Pet != null ? $"pet={Pet}\n" : "") + (NoInstall ? "noinstall=1\n" : ""));
+            }
+            catch { }
+        }
+    }
+
+    /// <summary>
+    /// 이 컴퓨터에 설치하기: %LOCALAPPDATA%\Programs\Chanelu\Chanelu.exe 로 복사하고,
+    /// 시작 메뉴 바로 가기와 .chanelupet 파일 연결을 만들어요. (관리자 권한 필요 없음)
+    /// </summary>
+    static class Installer
+    {
+        static string InstallDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Chanelu");
+        static string InstalledExe => Path.Combine(InstallDir, "Chanelu.exe");
+        const string ProgId = "BabyFlowerChanelu.Pet";
+
+        static bool IsInstalled =>
+            string.Equals(Path.GetFullPath(Application.ExecutablePath), Path.GetFullPath(InstalledExe), StringComparison.OrdinalIgnoreCase);
+
+        [DllImport("shell32.dll")] static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
+
+        /// <summary>.chanelupet 파일을 더블클릭하면 이 프로그램이 열리게 (지금 실행한 exe 기준)</summary>
+        public static void RegisterFileType()
+        {
+            try
+            {
+                var exe = Application.ExecutablePath;
+                using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Classes\.chanelupet")) k.SetValue("", ProgId);
+                using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ProgId}")) k.SetValue("", "샤네루 펫");
+                using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ProgId}\DefaultIcon")) k.SetValue("", $"\"{exe}\",0");
+                using (var k = Registry.CurrentUser.CreateSubKey($@"Software\Classes\{ProgId}\shell\open\command")) k.SetValue("", $"\"{exe}\" \"%1\"");
+                SHChangeNotify(0x08000000, 0, IntPtr.Zero, IntPtr.Zero); // 탐색기에 알려요
+            }
+            catch { }
+        }
+
+        /// <summary>설치 안 된 곳에서 실행했으면 한 번 물어봐요. 설치하고 새로 띄웠으면 true (이 프로그램은 곧 꺼져요).</summary>
+        public static bool Offer(Settings settings, Func<bool> isRunAtStartup, Action<string> setRunAtStartup)
+        {
+            if (IsInstalled || settings.NoInstall) return false;
+            var ok = MessageBox.Show(
+                "샤네루를 이 컴퓨터에 설치할까요?\n\n설치하면 시작 메뉴에서 열 수 있고, 펫 파일(.chanelupet)을 더블클릭해서 펫을 추가할 수 있어요. 받은 폴더는 지워도 괜찮아요.",
+                "꽃개 샤네루", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (ok != DialogResult.Yes)
+            {
+                settings.NoInstall = true;
+                settings.Save();
+                return false;
+            }
+            try
+            {
+                Directory.CreateDirectory(InstallDir);
+                File.Copy(Application.ExecutablePath, InstalledExe, true);
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show("설치하지 못했어요: " + e.Message, "꽃개 샤네루", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+            if (isRunAtStartup()) setRunAtStartup(InstalledExe);
+            CreateShortcut();
+            // 설치한 프로그램을 띄우면, 그 프로그램이 파일 연결을 자기 위치로 바꾸고 이 프로그램에게서 자리를 넘겨받아요
+            try { Process.Start(InstalledExe); return true; } catch { return false; }
+        }
+
+        static void CreateShortcut()
+        {
+            try
+            {
+                var lnkPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "꽃개 샤네루.lnk");
+                var t = Type.GetTypeFromProgID("WScript.Shell");
+                var shell = Activator.CreateInstance(t);
+                var lnk = t.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
+                var lt = lnk.GetType();
+                lt.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { InstalledExe });
+                lt.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { InstallDir });
+                lt.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
             }
             catch { }
         }
@@ -524,10 +656,14 @@ namespace Chanelu
         {
             base.OnLoad(e);
             Render();
-            if (loadWarning != null)
-                BeginInvoke((Action)(() => MessageBox.Show(
-                    loadWarning + (pet.Builtin ? "\n대신 샤네루가 나왔어요." : ""), "펫을 불러오지 못했어요",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning)));
+            Installer.RegisterFileType();
+            BeginInvoke((Action)(() =>
+            {
+                if (loadWarning != null)
+                    MessageBox.Show(loadWarning + (pet.Builtin ? "\n대신 샤네루가 나왔어요." : ""), "펫을 불러오지 못했어요",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Installer.Offer(settings, IsRunAtStartup, exe => SetRunAtStartup(true, exe));
+            }));
         }
 
         // ---- 크기 ----
@@ -976,11 +1112,11 @@ namespace Chanelu
                 return k?.GetValue(RunName) is string;
         }
 
-        static void SetRunAtStartup(bool on)
+        static void SetRunAtStartup(bool on, string exe = null)
         {
             using (var k = Registry.CurrentUser.CreateSubKey(RunKey))
             {
-                if (on) k.SetValue(RunName, $"\"{Application.ExecutablePath}\"");
+                if (on) k.SetValue(RunName, $"\"{exe ?? Application.ExecutablePath}\"");
                 else k.DeleteValue(RunName, false);
             }
         }

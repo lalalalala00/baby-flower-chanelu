@@ -34,6 +34,25 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key><string>Chanelu Pet</string>
+      <key>CFBundleTypeRole</key><string>Viewer</string>
+      <key>LSHandlerRank</key><string>Owner</string>
+      <key>LSItemContentTypes</key><array><string>com.lalalalala00.chanelu.pet</string></array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key><string>com.lalalalala00.chanelu.pet</string>
+      <key>UTTypeDescription</key><string>Chanelu Pet</string>
+      <key>UTTypeConformsTo</key><array><string>public.data</string></array>
+      <key>UTTypeTagSpecification</key>
+      <dict><key>public.filename-extension</key><array><string>chanelupet</string></array></dict>
+    </dict>
+  </array>
   <key>NSHumanReadableCopyright</key><string>© 2026 lalalalala00. Chanelu artwork all rights reserved.</string>
 </dict>
 </plist>
