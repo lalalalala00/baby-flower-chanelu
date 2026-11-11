@@ -32,6 +32,41 @@ MyPet/
     └── spritesheet.png
 ```
 
+## 권장 시트 구성 (새 펫의 기본 틀)
+
+웹 제작기에서 만드는 펫은 **4열 × 6행**을 기본으로 해요. 행마다 동작 하나, 칸은 모두 같은 크기예요.
+기본 샤네루(8열 × 11행)는 이 틀과 상관없이 지금 그대로예요.
+
+| 행 | 동작 | pet.json 이름 | 프레임 번호 |
+|---|---|---|---|
+| 1 | 정면으로 서서 눈 깜빡이기 | `idle` | 0–3 |
+| 2 | 오른쪽을 보고 걷기 | `walk` (`walkFacing: "right"`) | 4–7 |
+| 3 | 엎드려 잠들기 | `sleepStart` 0–3 → `sleep` 3, 2 반복 | 8–11 |
+| 4 | 제자리 점프 | `jump` | 12–15 |
+| 5 | 고개를 양옆으로 두리번 | `look` | 16–19 |
+| 6 | 입을 벌리고 웃기 | `happy` | 20–23 |
+
+```json
+{
+  "version": 1,
+  "name": "샤네루친구",
+  "sprite": "spritesheet.png",
+  "frameWidth": 313,
+  "frameHeight": 313,
+  "columns": 4,
+  "walkFacing": "right",
+  "animations": {
+    "idle":       { "frames": [0, 1, 2, 3], "fps": 4 },
+    "walk":       { "frames": [4, 5, 6, 7], "fps": 7 },
+    "sleepStart": { "frames": [8, 9, 10, 11], "fps": 3 },
+    "sleep":      { "frames": [11, 10], "fps": 1 },
+    "jump":       { "frames": [12, 13, 14, 15], "fps": 8 },
+    "look":       { "frames": [16, 17, 18, 19], "fps": 4 },
+    "happy":      { "frames": [20, 21, 22, 23], "fps": 5 }
+  }
+}
+```
+
 ## 예시
 
 ```json
