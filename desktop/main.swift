@@ -9,8 +9,10 @@
 //
 // 샤네루 말고 다른 펫도 띄울 수 있어요: pet.json + 스프라이트 시트 (docs/pet-format.md).
 // 혼자 실행할 때 펫을 찾는 순서: CHANELU_PET 환경 변수 → 앱 옆 PetData/pet.json 또는 pet.json
-// → 메뉴의 "펫 불러오기…"로 저장해 둔 펫 → 기본 샤네루.
+// → 메뉴 "펫 바꾸기"에서 마지막으로 고른 펫 → 기본 샤네루.
+// 앱 옆에서 찾은 펫은 펫 목록(~/Library/Application Support/Chanelu/Pets)에 복사돼서 계속 고를 수 있어요.
 import AppKit
+import CryptoKit
 
 signal(SIGPIPE, SIG_IGN)
 
@@ -90,8 +92,10 @@ struct Pet {
     var clips: [String: Clip]
     var images: [Int: CGImage]
     var builtin: Bool
-    /// pet.json 이 있던 폴더 (불러오기로 저장할 때 씀)
+    /// pet.json 이 있던 폴더
     var source: URL?
+    /// 펫 목록 안의 이름표 (기본 샤네루, 목록에 없는 펫은 nil)
+    var id: String? = nil
 
     func has(_ n: String) -> Bool { clips[n] != nil }
     /// 이름 중 처음 있는 동작
@@ -210,7 +214,8 @@ func loadPetJSON(_ url: URL) throws -> Pet {
 // ---- 펫 찾기 ----
 let supportDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     .appendingPathComponent("Chanelu", isDirectory: true)
-let savedPetDir = supportDir.appendingPathComponent("Pet", isDirectory: true)
+/// 펫 목록: Pets/<id>/pet.json + 시트. id는 파일 내용으로 정해서 같은 펫은 한 번만 들어가요.
+let petsDir = supportDir.appendingPathComponent("Pets", isDirectory: true)
 
 /// 인터넷에서 받은 앱은 macOS가 임시 위치로 옮겨 실행해요(App Translocation). 그럴 때도 원래 위치를 찾아요.
 func originalAppURL() -> URL {
@@ -229,50 +234,91 @@ func originalAppURL() -> URL {
 /// 펫을 못 읽었을 때 알려 줄 말 (혼자 실행할 때 창으로 보여요)
 var loadWarning: String?
 
+/// 펫을 목록에 넣고 id를 돌려줘요. 이미 있으면 그대로 (isNew = false).
+func addToLibrary(_ dir: URL) throws -> (id: String, isNew: Bool) {
+    let fm = FileManager.default
+    let json = dir.appendingPathComponent("pet.json")
+    let data = try Data(contentsOf: json)
+    guard let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let sprite = j["sprite"] as? String else { throw PetError(message: "pet.json을 읽을 수 없어요") }
+    let spriteData = try Data(contentsOf: dir.appendingPathComponent(sprite))
+    let digest = SHA256.hash(data: data + spriteData)
+    let id = digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    let dst = petsDir.appendingPathComponent(id, isDirectory: true)
+    if fm.fileExists(atPath: dst.appendingPathComponent("pet.json").path) { return (id, false) }
+    let tmp = petsDir.appendingPathComponent(".\(id).tmp", isDirectory: true)
+    try? fm.removeItem(at: tmp)
+    let spriteDst = tmp.appendingPathComponent(sprite)
+    try fm.createDirectory(at: spriteDst.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try data.write(to: tmp.appendingPathComponent("pet.json"))
+    try spriteData.write(to: spriteDst)
+    try? fm.removeItem(at: dst)
+    try fm.moveItem(at: tmp, to: dst)
+    return (id, true)
+}
+
+struct LibraryEntry { let id: String; let name: String; let added: Date }
+
+/// 목록에 있는 펫들 (넣은 순서)
+func libraryEntries() -> [LibraryEntry] {
+    let fm = FileManager.default
+    guard let dirs = try? fm.contentsOfDirectory(at: petsDir, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) else { return [] }
+    return dirs.compactMap { d -> LibraryEntry? in
+        guard let data = try? Data(contentsOf: d.appendingPathComponent("pet.json")),
+              let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        let name = (j["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "내 펫"
+        let added = (try? d.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
+        return LibraryEntry(id: d.lastPathComponent, name: name, added: added)
+    }.sorted { $0.added < $1.added }
+}
+
+func loadLibraryPet(_ id: String) throws -> Pet {
+    var p = try loadPetJSON(petsDir.appendingPathComponent(id, isDirectory: true))
+    p.id = id
+    return p
+}
+
 func findPet() -> Pet {
-    var tries: [URL] = []
+    func report(_ path: String, _ e: Error) {
+        let msg = (e as? PetError)?.message ?? e.localizedDescription
+        loadWarning = msg
+        FileHandle.standardError.write("pet: \(path): \(msg)\n".data(using: .utf8)!)
+    }
     if !standalone {
         // VS Code 확장: 첫 인자가 pet.json이면 그 펫, 아니면 샤네루 시트
-        if args[1].hasSuffix(".json") { tries.append(URL(fileURLWithPath: args[1])) }
+        if args[1].hasSuffix(".json") {
+            do { return try loadPetJSON(URL(fileURLWithPath: args[1])) } catch { report(args[1], error) }
+        }
     } else {
         if let env = ProcessInfo.processInfo.environment["CHANELU_PET"], !env.isEmpty {
-            tries.append(URL(fileURLWithPath: env))
+            do { return try loadPetJSON(URL(fileURLWithPath: env)) } catch { report(env, error) }
         }
+        // 앱 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요.
+        // 이미 목록에 있는 펫이면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
         let beside = originalAppURL().deletingLastPathComponent()
-        for p in ["PetData/pet.json", "pet.json"] {
-            let u = beside.appendingPathComponent(p)
-            if FileManager.default.fileExists(atPath: u.path) { tries.append(u); break }
+        for rel in ["PetData/pet.json", "pet.json"] {
+            let u = beside.appendingPathComponent(rel)
+            guard FileManager.default.fileExists(atPath: u.path) else { continue }
+            do {
+                var p = try loadPetJSON(u)
+                guard let dir = p.source, let added = try? addToLibrary(dir) else { return p } // 복사 못 하면 이번만 띄워요
+                if added.isNew || defaults.string(forKey: "pet") == nil {
+                    p.id = added.id
+                    defaults.set(added.id, forKey: "pet")
+                    return p
+                }
+            } catch { report(u.path, error) }
+            break
         }
-        let saved = savedPetDir.appendingPathComponent("pet.json")
-        if FileManager.default.fileExists(atPath: saved.path) { tries.append(saved) }
-    }
-    for u in tries {
-        do { return try loadPetJSON(u) } catch let e as PetError {
-            loadWarning = e.message
-            FileHandle.standardError.write("pet: \(u.path): \(e.message)\n".data(using: .utf8)!)
-        } catch {}
+        // 마지막으로 고른 펫
+        if let id = defaults.string(forKey: "pet"), !id.isEmpty {
+            do { return try loadLibraryPet(id) } catch { report(id, error) }
+        }
     }
     do { return try chaneluPet(sheetPath: builtinSheet) } catch {
         FileHandle.standardError.write("cannot load sheet\n".data(using: .utf8)!)
         exit(3)
     }
-}
-
-/// 불러온 펫(pet.json + 시트)을 Application Support에 복사해 두고, 다음 실행부터 그 펫을 써요.
-func savePet(from dir: URL) throws {
-    let fm = FileManager.default
-    let json = dir.appendingPathComponent("pet.json")
-    guard let data = try? Data(contentsOf: json),
-          let j = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-          let sprite = j["sprite"] as? String else { throw PetError(message: "pet.json을 읽을 수 없어요") }
-    let tmp = supportDir.appendingPathComponent("Pet.tmp", isDirectory: true)
-    try? fm.removeItem(at: tmp)
-    let dst = tmp.appendingPathComponent(sprite)
-    try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try fm.copyItem(at: json, to: tmp.appendingPathComponent("pet.json"))
-    try fm.copyItem(at: dir.appendingPathComponent(sprite), to: dst)
-    try? fm.removeItem(at: savedPetDir)
-    try fm.moveItem(at: tmp, to: savedPetDir)
 }
 
 // ---- 창 ----
@@ -738,31 +784,28 @@ final class MenuTarget: NSObject {
         defaults.set(Double(item.tag), forKey: "sleepAfter")
         refresh()
     }
-    /// pet.json(또는 그게 든 폴더)을 골라 펫을 바꾸고, 다음에 켤 때도 그 펫이 나오게 저장해요
-    @objc func importPet() {
-        NSApp.activate(ignoringOtherApps: true)
-        let panel = NSOpenPanel()
-        panel.message = "pet.json 파일이나, pet.json이 들어 있는 폴더를 골라 주세요"
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.allowedFileTypes = ["json"]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+    /// 펫 바꾸기: 목록에서 고른 펫으로 (빈 id는 기본 샤네루)
+    @objc func selectPet(_ item: NSMenuItem) {
+        let id = item.representedObject as? String ?? ""
         do {
-            let p = try loadPetJSON(url)
-            if let dir = p.source { try savePet(from: dir) }
+            let p = id.isEmpty ? try chaneluPet(sheetPath: builtinSheet) : try loadLibraryPet(id)
+            defaults.set(id, forKey: "pet")
             ctl.setPet(p)
             setupMenuBar(ctl)
-        } catch let e as PetError {
-            alert("펫을 불러오지 못했어요", e.message)
         } catch {
-            alert("펫을 저장하지 못했어요", error.localizedDescription)
+            alert("펫을 바꾸지 못했어요", (error as? PetError)?.message ?? error.localizedDescription)
         }
     }
-    @objc func resetPet() {
-        try? FileManager.default.removeItem(at: savedPetDir)
-        guard let p = try? chaneluPet(sheetPath: builtinSheet) else { return }
-        ctl.setPet(p)
+    @objc func removePet(_ item: NSMenuItem) {
+        guard let id = item.representedObject as? String, !id.isEmpty else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let a = NSAlert()
+        a.messageText = "\(item.title)을(를) 목록에서 지울까요?"
+        a.informativeText = "받아 둔 펫 폴더가 있으면, 그 폴더의 앱을 다시 실행해서 목록에 넣을 수 있어요."
+        a.addButton(withTitle: "지우기")
+        a.addButton(withTitle: "취소")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        try? FileManager.default.removeItem(at: petsDir.appendingPathComponent(id, isDirectory: true))
         setupMenuBar(ctl)
     }
     func refresh() {
@@ -801,6 +844,31 @@ func setupMenuBar(_ ctl: Controller) {
     _ = add("쓰다듬기", #selector(MenuTarget.pet))
     _ = add("재우기", #selector(MenuTarget.sleep))
 
+    // 펫 바꾸기: 기본 샤네루 + 목록의 펫들. 지금 펫이 아닌 펫은 지울 수 있어요.
+    let lib = libraryEntries()
+    let petMenu = NSMenu()
+    let choices = [("", "꽃개 샤네루")] + lib.map { ($0.id, $0.name) }
+    for (id, name) in choices {
+        let i = add(name, #selector(MenuTarget.selectPet(_:)), to: petMenu)
+        i.representedObject = id
+        i.state = (p.id ?? (p.builtin ? "" : "?")) == id ? .on : .off
+    }
+    let removable = lib.filter { $0.id != p.id }
+    if !removable.isEmpty {
+        petMenu.addItem(.separator())
+        let removeMenu = NSMenu()
+        for e in removable {
+            let i = add(e.name, #selector(MenuTarget.removePet(_:)), to: removeMenu)
+            i.representedObject = e.id
+        }
+        let removeRoot = NSMenuItem(title: "목록에서 지우기", action: nil, keyEquivalent: "")
+        removeRoot.submenu = removeMenu
+        petMenu.addItem(removeRoot)
+    }
+    let petRoot = NSMenuItem(title: "펫 바꾸기", action: nil, keyEquivalent: "")
+    petRoot.submenu = petMenu
+    menu.addItem(petRoot)
+
     let sizeMenu = NSMenu()
     for (name, v) in [("작게", 72), ("보통", 96), ("크게", 128), ("아주 크게", 160)] {
         t.sizeItems.append(add(name, #selector(MenuTarget.setSize(_:)), to: sizeMenu, tag: v))
@@ -817,9 +885,6 @@ func setupMenuBar(_ ctl: Controller) {
     sleepRoot.submenu = sleepMenu
     menu.addItem(sleepRoot)
 
-    menu.addItem(.separator())
-    _ = add("펫 불러오기…", #selector(MenuTarget.importPet))
-    if !p.builtin { _ = add("샤네루로 되돌리기", #selector(MenuTarget.resetPet)) }
     menu.addItem(.separator())
     _ = add("종료", #selector(MenuTarget.quitApp), key: "q")
     item.menu = menu

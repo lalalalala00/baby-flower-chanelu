@@ -3,8 +3,9 @@
 // 키보드·마우스를 한동안 안 쓰면 잠들어요. 트레이 아이콘 메뉴로 크기·잠들기·시작 시 실행·종료를 바꿔요.
 //
 // 샤네루 말고 다른 펫도 띄울 수 있어요: pet.json + 스프라이트 시트 (docs/pet-format.md).
-// 펫을 찾는 순서: 실행 인자(pet.json 경로, exe에 끌어다 놓기) → exe 옆 PetData\pet.json 또는 pet.json
-// → 메뉴의 "펫 불러오기…"로 저장해 둔 펫(%APPDATA%\Chanelu\Pet) → 기본 샤네루.
+// 펫을 찾는 순서: 실행 인자(pet.json 경로, exe에 끌어다 놓기) 또는 exe 옆 PetData\pet.json, pet.json
+// → 메뉴 "펫 바꾸기"에서 마지막으로 고른 펫 → 기본 샤네루.
+// 새로 찾은 펫은 펫 목록(%APPDATA%\Chanelu\Pets)에 복사돼서 계속 고를 수 있어요.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -16,6 +17,7 @@ using System.Drawing.Text;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Threading;
 using System.Windows.Forms;
 using System.Web.Script.Serialization;
@@ -34,8 +36,9 @@ namespace Chanelu
                 if (!created) return;
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                var pet = PetLoader.Find(args, out string warning);
-                Application.Run(new PupForm(pet, warning));
+                var settings = Settings.Load();
+                var pet = PetLoader.Find(args, settings, out string warning);
+                Application.Run(new PupForm(pet, warning, settings));
             }
         }
     }
@@ -78,8 +81,10 @@ namespace Chanelu
         public Bitmap Sheet;
         public Dictionary<string, Clip> Clips = new Dictionary<string, Clip>();
         public bool Builtin;
-        /// <summary>pet.json이 있던 폴더 (불러오기로 저장할 때 씀)</summary>
+        /// <summary>pet.json이 있던 폴더</summary>
         public string SourceDir;
+        /// <summary>펫 목록 안의 이름표 (기본 샤네루, 목록에 없는 펫은 null)</summary>
+        public string Id;
 
         public bool Has(string n) => Clips.ContainsKey(n);
         public string First(params string[] names) => names.FirstOrDefault(Has);
@@ -89,29 +94,100 @@ namespace Chanelu
 
     static class PetLoader
     {
-        public static string SavedDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Chanelu", "Pet");
+        /// <summary>펫 목록: Pets\<id>\pet.json + 시트. id는 파일 내용으로 정해서 같은 펫은 한 번만 들어가요.</summary>
+        public static string PetsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Chanelu", "Pets");
 
-        public static PetDef Find(string[] args, out string warning)
+        public static PetDef Find(string[] args, Settings settings, out string warning)
         {
             warning = null;
-            var tries = new List<string>();
-            if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])) tries.Add(args[0]);
-            var exeDir = Path.GetDirectoryName(Application.ExecutablePath);
-            foreach (var rel in new[] { Path.Combine("PetData", "pet.json"), "pet.json" })
+            // 실행 인자나 exe 옆에 새 펫이 있으면: 목록에 넣고 그 펫으로 바꿔요.
+            // 이미 목록에 있는 펫이면 메뉴에서 마지막으로 고른 펫을 그대로 써요.
+            string beside = null;
+            if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0])) beside = args[0];
+            else
             {
-                var p = Path.Combine(exeDir, rel);
-                if (File.Exists(p)) { tries.Add(p); break; }
+                var exeDir = Path.GetDirectoryName(Application.ExecutablePath);
+                beside = new[] { Path.Combine(exeDir, "PetData", "pet.json"), Path.Combine(exeDir, "pet.json") }.FirstOrDefault(File.Exists);
             }
-            var saved = Path.Combine(SavedDir, "pet.json");
-            if (File.Exists(saved)) tries.Add(saved);
-
-            foreach (var p in tries)
+            if (beside != null)
             {
-                try { return FromJson(p); }
-                catch (PetException e) { warning = e.Message; }
+                try
+                {
+                    var p = FromJson(beside);
+                    string id; bool isNew;
+                    try { (id, isNew) = AddToLibrary(p.SourceDir); }
+                    catch { return p; } // 복사 못 하면 이번만 띄워요
+                    if (isNew || settings.Pet == null)
+                    {
+                        p.Id = id;
+                        settings.Pet = id;
+                        settings.Save();
+                        return p;
+                    }
+                    p.Sheet.Dispose();
+                }
+                catch (Exception e) { warning = e.Message; }
+            }
+            if (!string.IsNullOrEmpty(settings.Pet))
+            {
+                try { return LoadLibraryPet(settings.Pet); }
                 catch (Exception e) { warning = e.Message; }
             }
             return Chanelu();
+        }
+
+        /// <summary>펫을 목록에 넣고 id를 돌려줘요. 이미 있으면 그대로 (isNew = false).</summary>
+        public static (string id, bool isNew) AddToLibrary(string dir)
+        {
+            var jsonBytes = File.ReadAllBytes(Path.Combine(dir, "pet.json"));
+            var j = new JavaScriptSerializer().DeserializeObject(System.Text.Encoding.UTF8.GetString(jsonBytes)) as Dictionary<string, object>;
+            var sprite = j != null && j.TryGetValue("sprite", out var sp) ? sp as string : null;
+            if (!SafeRelative(sprite)) throw new PetException("pet.json을 읽을 수 없어요");
+            var spriteBytes = File.ReadAllBytes(Path.Combine(dir, sprite));
+            string id;
+            using (var sha = SHA256.Create())
+            {
+                var hash = sha.ComputeHash(jsonBytes.Concat(spriteBytes).ToArray());
+                id = string.Concat(hash.Take(8).Select(b => b.ToString("x2")));
+            }
+            var dst = Path.Combine(PetsDir, id);
+            if (File.Exists(Path.Combine(dst, "pet.json"))) return (id, false);
+            var tmp = Path.Combine(PetsDir, "." + id + ".tmp");
+            if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
+            var spriteDst = Path.Combine(tmp, sprite);
+            Directory.CreateDirectory(Path.GetDirectoryName(spriteDst));
+            File.WriteAllBytes(Path.Combine(tmp, "pet.json"), jsonBytes);
+            File.WriteAllBytes(spriteDst, spriteBytes);
+            if (Directory.Exists(dst)) Directory.Delete(dst, true);
+            Directory.Move(tmp, dst);
+            return (id, true);
+        }
+
+        /// <summary>목록에 있는 펫들 (넣은 순서): (id, 이름)</summary>
+        public static List<(string id, string name)> Library()
+        {
+            var list = new List<(string, string, DateTime)>();
+            if (!Directory.Exists(PetsDir)) return new List<(string, string)>();
+            foreach (var d in Directory.GetDirectories(PetsDir))
+            {
+                var id = Path.GetFileName(d);
+                if (id.StartsWith(".")) continue;
+                try
+                {
+                    var j = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(Path.Combine(d, "pet.json"))) as Dictionary<string, object>;
+                    var name = j != null && j.TryGetValue("name", out var n) ? n as string : null;
+                    list.Add((id, string.IsNullOrWhiteSpace(name) ? "내 펫" : name, Directory.GetCreationTimeUtc(d)));
+                }
+                catch { }
+            }
+            return list.OrderBy(e => e.Item3).Select(e => (e.Item1, e.Item2)).ToList();
+        }
+
+        public static PetDef LoadLibraryPet(string id)
+        {
+            var p = FromJson(Path.Combine(PetsDir, id, "pet.json"));
+            p.Id = id;
+            return p;
         }
 
         /// <summary>기본 샤네루: 8열 x 11행, 행마다 동작 하나</summary>
@@ -236,23 +312,6 @@ namespace Chanelu
             }
             return pet;
         }
-
-        /// <summary>불러온 펫(pet.json + 시트)을 %APPDATA%\Chanelu\Pet 에 복사해 두고, 다음 실행부터 그 펫을 써요.</summary>
-        public static void Save(string dir)
-        {
-            var json = Path.Combine(dir, "pet.json");
-            var j = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(json)) as Dictionary<string, object>;
-            var sprite = j != null && j.TryGetValue("sprite", out var sp) ? sp as string : null;
-            if (!SafeRelative(sprite)) throw new PetException("pet.json을 읽을 수 없어요");
-            var tmp = SavedDir + ".tmp";
-            if (Directory.Exists(tmp)) Directory.Delete(tmp, true);
-            var dst = Path.Combine(tmp, sprite);
-            Directory.CreateDirectory(Path.GetDirectoryName(dst));
-            File.Copy(json, Path.Combine(tmp, "pet.json"));
-            File.Copy(Path.Combine(dir, sprite), dst);
-            if (Directory.Exists(SavedDir)) Directory.Delete(SavedDir, true);
-            Directory.Move(tmp, SavedDir);
-        }
     }
 
     /// <summary>%APPDATA%\Chanelu\settings.txt 에 key=value 로 저장</summary>
@@ -260,6 +319,8 @@ namespace Chanelu
     {
         public int Size = 96;
         public int SleepAfter = 120;
+        /// <summary>마지막으로 고른 펫 id. ""는 기본 샤네루, null은 아직 고른 적 없음.</summary>
+        public string Pet;
 
         static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Chanelu", "settings.txt");
 
@@ -271,6 +332,7 @@ namespace Chanelu
                 foreach (var line in File.ReadAllLines(FilePath))
                 {
                     var kv = line.Split('=');
+                    if (kv.Length == 2 && kv[0].Trim() == "pet") { s.Pet = kv[1].Trim(); continue; }
                     if (kv.Length != 2 || !int.TryParse(kv[1].Trim(), out int v)) continue;
                     if (kv[0].Trim() == "size") s.Size = Math.Max(40, Math.Min(300, v));
                     if (kv[0].Trim() == "sleep") s.SleepAfter = Math.Max(0, v);
@@ -285,7 +347,7 @@ namespace Chanelu
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
-                File.WriteAllText(FilePath, $"size={Size}\nsleep={SleepAfter}\n");
+                File.WriteAllText(FilePath, $"size={Size}\nsleep={SleepAfter}\n" + (Pet != null ? $"pet={Pet}\n" : ""));
             }
             catch { }
         }
@@ -296,7 +358,7 @@ namespace Chanelu
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         const string RunName = "BabyFlowerChanelu";
 
-        readonly Settings settings = Settings.Load();
+        readonly Settings settings;
         PetDef pet;
         readonly string loadWarning;
         readonly Random rnd = new Random();
@@ -320,9 +382,10 @@ namespace Chanelu
         Point pressAt, dragOffset;
         bool pressed, dragMoved;
 
-        public PupForm(PetDef pet, string warning)
+        public PupForm(PetDef pet, string warning, Settings settings)
         {
             this.pet = pet;
+            this.settings = settings;
             loadWarning = warning;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
@@ -687,22 +750,50 @@ namespace Chanelu
             tray.Text = pet.Name.Length > 63 ? pet.Name.Substring(0, 63) : pet.Name;
         }
 
-        /// <summary>pet.json을 골라 펫을 바꾸고, 다음에 켤 때도 그 펫이 나오게 저장해요</summary>
-        void ImportPet()
+        /// <summary>펫 바꾸기: 목록에서 고른 펫으로 (빈 id는 기본 샤네루)</summary>
+        void SelectPet(string id)
         {
-            using (var dlg = new OpenFileDialog { Title = "pet.json 파일을 골라 주세요", Filter = "펫 파일 (pet.json)|*.json|모든 파일|*.*" })
+            try
             {
-                if (dlg.ShowDialog() != DialogResult.OK) return;
-                try
-                {
-                    var p = PetLoader.FromJson(dlg.FileName);
-                    PetLoader.Save(p.SourceDir);
-                    SetPet(p);
-                }
-                catch (Exception e)
-                {
-                    MessageBox.Show(e.Message, "펫을 불러오지 못했어요", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
+                var p = id == "" ? PetLoader.Chanelu() : PetLoader.LoadLibraryPet(id);
+                settings.Pet = id;
+                settings.Save();
+                SetPet(p);
+            }
+            catch (Exception e)
+            {
+                MessageBox.Show(e.Message, "펫을 바꾸지 못했어요", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        void RemovePet(string id, string name)
+        {
+            var ok = MessageBox.Show($"{name}을(를) 목록에서 지울까요?\n받아 둔 펫 폴더가 있으면, 그 폴더의 프로그램을 다시 실행해서 목록에 넣을 수 있어요.",
+                "목록에서 지우기", MessageBoxButtons.OKCancel, MessageBoxIcon.Question);
+            if (ok != DialogResult.OK) return;
+            try { Directory.Delete(Path.Combine(PetLoader.PetsDir, id), true); } catch { }
+        }
+
+        /// <summary>펫 바꾸기 메뉴: 기본 샤네루 + 목록의 펫들. 지금 펫이 아닌 펫은 지울 수 있어요.</summary>
+        void FillPetMenu(ToolStripMenuItem petMenu)
+        {
+            petMenu.DropDownItems.Clear();
+            var lib = PetLoader.Library();
+            var current = pet.Id ?? (pet.Builtin ? "" : null);
+            foreach (var (id, name) in new[] { ("", "꽃개 샤네루") }.Concat(lib))
+            {
+                var item = new ToolStripMenuItem(name) { Checked = id == current };
+                item.Click += (_, __) => SelectPet(id);
+                petMenu.DropDownItems.Add(item);
+            }
+            var removable = lib.Where(e => e.id != pet.Id).ToList();
+            if (removable.Count > 0)
+            {
+                petMenu.DropDownItems.Add(new ToolStripSeparator());
+                var remove = new ToolStripMenuItem("목록에서 지우기");
+                foreach (var (id, name) in removable)
+                    remove.DropDownItems.Add(name, null, (_, __) => RemovePet(id, name));
+                petMenu.DropDownItems.Add(remove);
             }
         }
 
@@ -715,7 +806,7 @@ namespace Chanelu
             var sizeMenu = new ToolStripMenuItem("크기");
             var sleepMenu = new ToolStripMenuItem("안 움직이면 잠들기");
             var startup = new ToolStripMenuItem("윈도우 시작할 때 실행");
-            var reset = new ToolStripMenuItem("샤네루로 되돌리기");
+            var petMenu = new ToolStripMenuItem("펫 바꾸기");
 
             void RefreshChecks()
             {
@@ -723,7 +814,7 @@ namespace Chanelu
                 foreach (ToolStripMenuItem i in sleepMenu.DropDownItems) i.Checked = (int)i.Tag == settings.SleepAfter;
                 startup.Checked = IsRunAtStartup();
                 header.Text = pet.Name;
-                reset.Visible = !pet.Builtin;
+                FillPetMenu(petMenu);
             }
 
             foreach (var (name, v) in new[] { ("작게", 72), ("보통", 96), ("크게", 128), ("아주 크게", 160) })
@@ -739,22 +830,15 @@ namespace Chanelu
                 sleepMenu.DropDownItems.Add(item);
             }
             startup.Click += (_, __) => { SetRunAtStartup(!IsRunAtStartup()); RefreshChecks(); };
-            reset.Click += (_, __) =>
-            {
-                try { if (Directory.Exists(PetLoader.SavedDir)) Directory.Delete(PetLoader.SavedDir, true); } catch { }
-                SetPet(PetLoader.Chanelu());
-            };
 
             menu.Items.Add(header);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("쓰다듬기", null, (_, __) => Pet());
             menu.Items.Add("재우기", null, (_, __) => FallAsleep());
+            menu.Items.Add(petMenu);
             menu.Items.Add(sizeMenu);
             menu.Items.Add(sleepMenu);
             menu.Items.Add(startup);
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("펫 불러오기…", null, (_, __) => ImportPet());
-            menu.Items.Add(reset);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("종료", null, (_, __) => { tray.Visible = false; Application.Exit(); });
             menu.Opening += (_, __) => RefreshChecks();
