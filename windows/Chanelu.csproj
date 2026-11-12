@@ -11,7 +11,7 @@
     <RootNamespace>Chanelu</RootNamespace>
     <ApplicationIcon>chanelu.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Product>Baby Flower Chanelu</Product>
     <AssemblyTitle>Baby Flower Chanelu</AssemblyTitle>
     <Company>lalalalala00</Company>
