@@ -125,7 +125,7 @@ namespace Chanelu
     {
         /// <summary>펫 목록: Pets\<id>\pet.json + 시트. id는 파일 내용으로 정해서 같은 펫은 한 번만 들어가요.</summary>
         /// <summary>pet.json에 이름이 없을 때</summary>
-        public const string DefaultName = "샤네루친구";
+        public const string DefaultName = "쵸콘이";
 
         public static string PetsDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Chanelu", "Pets");
 

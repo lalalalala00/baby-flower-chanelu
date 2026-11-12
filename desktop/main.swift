@@ -108,7 +108,7 @@ struct Pet {
 struct PetError: Error { let message: String }
 
 /// pet.json에 이름이 없을 때
-let defaultPetName = "샤네루친구"
+let defaultPetName = "쵸콘이"
 
 func loadSheet(_ path: String) throws -> CGImage {
     guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
