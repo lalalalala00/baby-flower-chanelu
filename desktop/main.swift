@@ -403,6 +403,8 @@ final class Controller {
     var mode = Mode.idle
     var anim: Anim?
     var fi = 0, ft = 0.0
+    /// 지금 동작을 좌우로 뒤집어 그리기 (갸우뚱을 오른쪽으로도)
+    var mirror = false
     var target: CGFloat = 0, dir: CGFloat = 1
     var restUntil = 0.0
     var lastInput = CACurrentMediaTime()
@@ -477,14 +479,16 @@ final class Controller {
     func setFrame(_ c: Clip, _ i: Int) {
         guard let img = current.images[i] else { return }
         dog.contents = img
-        dog.transform = c.flip ? CATransform3DMakeScale(-1, 1, 1) : CATransform3DIdentity
+        dog.transform = c.flip != mirror ? CATransform3DMakeScale(-1, 1, 1) : CATransform3DIdentity
     }
 
     /// 동작 재생. 펫 파일에 fps가 있으면 그 속도, 없으면 동작별 기본 속도(dur).
-    func play(_ name: String, dur: Double, loop: Bool = false, onDone: (() -> Void)? = nil) {
+    /// mirror: 좌우로 뒤집어서 재생 (갸우뚱 시트는 한쪽으로만 기울어 있어서 반대쪽은 뒤집어 써요)
+    func play(_ name: String, dur: Double, loop: Bool = false, mirror: Bool = false, onDone: (() -> Void)? = nil) {
         guard let c = current.clips[name] ?? current.clips["idle"] else { return }
         anim = Anim(clip: c, dur: c.dur ?? dur, loop: loop, onDone: onDone)
         fi = 0; ft = 0
+        self.mirror = mirror
         setFrame(c, c.frames[0])
     }
 
@@ -519,7 +523,9 @@ final class Controller {
     func startIdle() {
         mode = .idle
         restUntil = CACurrentMediaTime() + 2 + Double.random(in: 0...5)
-        play(pick(["idle", "idle", "look", "happy", "sit", "sitBlink"]), dur: 0.16, loop: true)
+        let name = pick(["idle", "idle", "look", "happy", "sit", "sitBlink"])
+        // 갸우뚱은 반은 뒤집어서 오른쪽으로도 기울게
+        play(name, dur: 0.16, loop: true, mirror: name == "look" && Bool.random())
     }
 
     func startWalk() {

@@ -676,11 +676,12 @@ namespace Chanelu
             ch = h + headroom;
             foreach (var f in frames.Values) f.Dispose();
             frames.Clear();
-            // 동작에 쓰이는 프레임만 그려 둬요
-            foreach (var clip in pet.Clips.Values)
-                foreach (var i in clip.Frames)
+            // 동작에 쓰이는 프레임만 그려 둬요. 갸우뚱(look)은 뒤집어 재생하기도 해서 반대쪽도 그려 둬요.
+            foreach (var kv in pet.Clips)
+            foreach (var flip in kv.Key == "look" ? new[] { kv.Value.Flip, !kv.Value.Flip } : new[] { kv.Value.Flip })
+                foreach (var i in kv.Value.Frames)
                 {
-                    var key = (i, clip.Flip);
+                    var key = (i, flip);
                     if (frames.ContainsKey(key)) continue;
                     var bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
                     using (var g = Graphics.FromImage(bmp))
@@ -688,7 +689,7 @@ namespace Chanelu
                         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
                         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                         g.CompositingQuality = CompositingQuality.HighQuality;
-                        if (clip.Flip) { g.TranslateTransform(w, 0); g.ScaleTransform(-1, 1); }
+                        if (flip) { g.TranslateTransform(w, 0); g.ScaleTransform(-1, 1); }
                         var src = new Rectangle(i % pet.Cols * pet.FW, i / pet.Cols * pet.FH, pet.FW, pet.FH);
                         g.DrawImage(pet.Sheet, new Rectangle(0, 0, w, h), src, GraphicsUnit.Pixel);
                     }
@@ -710,9 +711,11 @@ namespace Chanelu
 
         // ---- 애니메이션 ----
         /// <summary>동작 재생. 펫 파일에 fps가 있으면 그 속도, 없으면 동작별 기본 속도(dur).</summary>
-        void Play(string name, double dur, bool loop = false, Action onDone = null)
+        /// <param name="mirror">좌우로 뒤집어서 재생 (갸우뚱 시트는 한쪽으로만 기울어 있어서 반대쪽은 뒤집어 써요)</param>
+        void Play(string name, double dur, bool loop = false, Action onDone = null, bool mirror = false)
         {
             if (!pet.Clips.TryGetValue(name, out var clip)) clip = pet.Clips["idle"];
+            if (mirror) { clip = clip.Copy(); clip.Flip = !clip.Flip; }
             anim = new Anim { Clip = clip, Dur = clip.Dur ?? dur, Loop = loop, OnDone = onDone };
             fi = 0;
             ft = 0;
@@ -754,7 +757,9 @@ namespace Chanelu
         {
             mode = Mode.Idle;
             restUntil = Now + 2 + rnd.NextDouble() * 5;
-            Play(Pick("idle", "idle", "idle", "look", "happy", "sit", "sitBlink"), 0.16, loop: true);
+            var name = Pick("idle", "idle", "idle", "look", "happy", "sit", "sitBlink");
+            // 갸우뚱은 반은 뒤집어서 오른쪽으로도 기울게
+            Play(name, 0.16, loop: true, mirror: name == "look" && rnd.Next(2) == 0);
         }
 
         void StartWalk()
