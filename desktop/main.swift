@@ -390,6 +390,7 @@ final class Controller {
         var dur: Double
         var loop: Bool
         var onDone: (() -> Void)?
+        var alternate = false // 반복할 때마다 좌우를 바꿔요 (갸우뚱을 왼쪽, 오른쪽 번갈아)
     }
 
     var current: Pet
@@ -486,7 +487,7 @@ final class Controller {
     /// mirror: 좌우로 뒤집어서 재생 (갸우뚱 시트는 한쪽으로만 기울어 있어서 반대쪽은 뒤집어 써요)
     func play(_ name: String, dur: Double, loop: Bool = false, mirror: Bool = false, onDone: (() -> Void)? = nil) {
         guard let c = current.clips[name] ?? current.clips["idle"] else { return }
-        anim = Anim(clip: c, dur: c.dur ?? dur, loop: loop, onDone: onDone)
+        anim = Anim(clip: c, dur: c.dur ?? dur, loop: loop, onDone: onDone, alternate: name == "look")
         fi = 0; ft = 0
         self.mirror = mirror
         setFrame(c, c.frames[0])
@@ -499,7 +500,10 @@ final class Controller {
             ft -= a.dur
             fi += 1
             if fi >= a.clip.frames.count {
-                if a.loop { fi = 0 } else {
+                if a.loop {
+                    fi = 0
+                    if a.alternate { mirror.toggle() }
+                } else {
                     fi = a.clip.frames.count - 1
                     let done = a.onDone
                     a.onDone = nil

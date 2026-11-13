@@ -80,6 +80,7 @@ namespace Chanelu
         public double Dur;
         public bool Loop;
         public Action OnDone;
+        public bool Alternate; // 반복할 때마다 좌우를 바꿔요 (갸우뚱을 왼쪽, 오른쪽 번갈아)
     }
 
     class Particle
@@ -716,7 +717,7 @@ namespace Chanelu
         {
             if (!pet.Clips.TryGetValue(name, out var clip)) clip = pet.Clips["idle"];
             if (mirror) { clip = clip.Copy(); clip.Flip = !clip.Flip; }
-            anim = new Anim { Clip = clip, Dur = clip.Dur ?? dur, Loop = loop, OnDone = onDone };
+            anim = new Anim { Clip = clip, Dur = clip.Dur ?? dur, Loop = loop, OnDone = onDone, Alternate = name == "look" };
             fi = 0;
             ft = 0;
         }
@@ -731,7 +732,12 @@ namespace Chanelu
                 fi++;
                 if (fi >= anim.Clip.Frames.Length)
                 {
-                    if (anim.Loop) { fi = 0; continue; }
+                    if (anim.Loop)
+                    {
+                        fi = 0;
+                        if (anim.Alternate) { anim.Clip = anim.Clip.Copy(); anim.Clip.Flip = !anim.Clip.Flip; }
+                        continue;
+                    }
                     fi = anim.Clip.Frames.Length - 1;
                     var done = anim.OnDone;
                     anim.OnDone = null;
